@@ -1,0 +1,150 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&family=Plus+Jakarta+Sans:ital,wght@0,200..800;1,200..800&family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-heading: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --color-indigo-650: #4338ca;
+
+  --animate-fadeIn: fadeIn 0.8s ease-out forwards;
+  --animate-scaleUp: scaleUp 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  --animate-loadingBar: loadingBar 1.8s ease-in-out infinite;
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes scaleUp {
+    from { opacity: 0; transform: scale(0.9); }
+    to { opacity: 1; transform: scale(1); }
+  }
+  @keyframes loadingBar {
+    0% { width: 0%; left: 0%; }
+    50% { width: 100%; left: 0%; }
+    100% { width: 0%; left: 100%; }
+  }
+}
+
+@layer utilities {
+  .glass-card {
+    background: rgba(255, 255, 255, 0.85);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(226, 232, 240, 0.8);
+  }
+}
+
+/* Custom compact scrollbar for grid sheets */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Animations for spreadsheet selection state */
+.grid-cell-active {
+  outline: 2px solid #4f46e5;
+  outline-offset: -2px;
+  background-color: #f5f3ff !important;
+}
+
+/* Sophisticated print styles to override interface elements */
+@media print {
+  @page {
+    size: A4 landscape;
+    margin: 8mm;
+  }
+
+  /* Ocultar barra lateral, cabeçalho, caixas de diálogo flutuantes, banners de informação, e painel de filtros */
+  aside,
+  header,
+  nav,
+  [class*="md:hidden"],
+  [class*="sticky top-0"],
+  #print-floating-menu,
+  #rn-info-banner,
+  #rn-filter-panel,
+  .print\:hidden,
+  button,
+  select,
+  input,
+  .no-print {
+    display: none !important;
+    visibility: hidden !important;
+    height: 0 !important;
+    width: 0 !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+  }
+
+  /* Redefinir estrutura de página e margens para impressão limpa de página cheia */
+  html, body, #root {
+    background: white !important;
+    background-color: white !important;
+    color: #000000 !important;
+    width: 100% !important;
+    height: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  .min-h-screen {
+    min-height: 0 !important;
+    height: auto !important;
+  }
+
+  /* Forçar as tabelas e cartões de relatório a ocupar a largura total e fundo branco */
+  .bg-slate-900, .bg-slate-800, .bg-slate-950 {
+    background-color: #1e293b !important;
+    color: #ffffff !important;
+  }
+
+  /* Garantir que quebras de página não cortem tabelas ou assinaturas */
+  table {
+    page-break-inside: avoid;
+  }
+
+  /* Forçar o cartão da Relação Nominal a tomar toda a largura e remover bordas cinzentas ou sombras */
+  #relacao-nominal-impressao-card {
+    position: relative !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    padding: 10px !important;
+    margin: 0 !important;
+    border: none !important;
+    box-shadow: none !important;
+    background: white !important;
+    display: block !important;
+    visibility: visible !important;
+  }
+
+  /* Garantir visibilidade de todas as tabelas e linhas */
+  table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+  }
+
+  th, td {
+    border: 1px solid #1e293b !important;
+    color: #000000 !important;
+  }
+
+  /* Ocultar quaisquer elementos dentro do relacao-nominal-parent que não sejam o próprio card */
+  #relacao-nominal-parent > :not(#relacao-nominal-impressao-card) {
+    display: none !important;
+  }
+}
+

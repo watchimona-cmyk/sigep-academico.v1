@@ -1665,11 +1665,9 @@ export default function DeclaracoesCertificados({
 
         const estGrade = subjName === 'NEC' ? notaEstagio : notaPAP;
         doc.setFont('times', 'bold');
-        if (estGrade) {
-          doc.text(String(estGrade), 123, currentY + (rowHeight/2) + 1, { align: 'center' });
-          doc.text(String(estGrade), 142, currentY + (rowHeight/2) + 1, { align: 'center' });
-          doc.text(notaParaExtenso(Number(estGrade)), 172, currentY + (rowHeight/2) + 1, { align: 'center' });
-        }
+        doc.text(estGrade ? String(estGrade) : '--', 123, currentY + (rowHeight/2) + 1, { align: 'center' });
+        doc.text(estGrade ? String(estGrade) : '--', 142, currentY + (rowHeight/2) + 1, { align: 'center' });
+        doc.text(estGrade ? notaParaExtenso(Number(estGrade)) : '--', 172, currentY + (rowHeight/2) + 1, { align: 'center' });
       } else {
         // Academic: shade 13ª
         doc.setFillColor(243, 244, 246);
@@ -1677,9 +1675,9 @@ export default function DeclaracoesCertificados({
         doc.rect(15, currentY, 180, rowHeight, 'D'); // redraw border
 
         doc.setFont('times', 'normal');
-        if (vals['10']) doc.text(String(vals['10']), 78, currentY + (rowHeight/2) + 1, { align: 'center' });
-        if (vals['11']) doc.text(String(vals['11']), 93, currentY + (rowHeight/2) + 1, { align: 'center' });
-        if (vals['12']) doc.text(String(vals['12']), 108, currentY + (rowHeight/2) + 1, { align: 'center' });
+        doc.text(vals['10'] ? String(vals['10']) : '--', 78, currentY + (rowHeight/2) + 1, { align: 'center' });
+        doc.text(vals['11'] ? String(vals['11']) : '--', 93, currentY + (rowHeight/2) + 1, { align: 'center' });
+        doc.text(vals['12'] ? String(vals['12']) : '--', 108, currentY + (rowHeight/2) + 1, { align: 'center' });
 
         const avg = calcMagisterioSubjectAverage(subjName);
         if (avg !== null) {
@@ -1687,6 +1685,9 @@ export default function DeclaracoesCertificados({
           doc.text(String(avg), 142, currentY + (rowHeight/2) + 1, { align: 'center' });
           doc.setFont('times', 'normal');
           doc.text(notaParaExtenso(avg), 172, currentY + (rowHeight/2) + 1, { align: 'center' });
+        } else {
+          doc.text('--', 142, currentY + (rowHeight/2) + 1, { align: 'center' });
+          doc.text('--', 172, currentY + (rowHeight/2) + 1, { align: 'center' });
         }
       }
 
@@ -1973,16 +1974,16 @@ export default function DeclaracoesCertificados({
 
         doc.setFont('Helvetica', 'normal');
         const vals = punivGrades[sub] || { '10': '', '11': '', '12': '' };
-        if (vals['10']) doc.text(String(vals['10']), 105, rowY + 4.2, { align: 'center' });
-        if (vals['11']) doc.text(String(vals['11']), 125, rowY + 4.2, { align: 'center' });
-        if (vals['12']) doc.text(String(vals['12']), 145, rowY + 4.2, { align: 'center' });
+        doc.text(vals['10'] ? String(vals['10']) : '--', 105, rowY + 4.2, { align: 'center' });
+        doc.text(vals['11'] ? String(vals['11']) : '--', 125, rowY + 4.2, { align: 'center' });
+        doc.text(vals['12'] ? String(vals['12']) : '--', 145, rowY + 4.2, { align: 'center' });
 
         const avg = calcPunivSubjectAverage(sub);
         if (avg !== null) {
           doc.setFont('Helvetica', 'bold');
           doc.text(`${avg} Val`, 172, rowY + 4.2, { align: 'center' });
         } else {
-          doc.text('-', 172, rowY + 4.2, { align: 'center' });
+          doc.text('--', 172, rowY + 4.2, { align: 'center' });
         }
 
         rowY += 6;
@@ -2276,9 +2277,9 @@ export default function DeclaracoesCertificados({
           doc.text(notaParaExtenso(Number(cycleVal)), 180, rowY + 4.5, { align: 'center' });
           doc.setFont('Helvetica', 'normal');
         } else {
-          doc.text('-', 115, rowY + 4.5, { align: 'center' });
-          doc.text('-', 150, rowY + 4.5, { align: 'center' });
-          doc.text('-', 180, rowY + 4.5, { align: 'center' });
+          doc.text('--', 115, rowY + 4.5, { align: 'center' });
+          doc.text('--', 150, rowY + 4.5, { align: 'center' });
+          doc.text('--', 180, rowY + 4.5, { align: 'center' });
         }
       } else {
         if (!subj.cycles.I) {
@@ -2306,9 +2307,9 @@ export default function DeclaracoesCertificados({
         doc.text(subj.name, 18, rowY + 4.5);
         doc.setFont('Helvetica', 'normal');
 
-        if (subj.cycles.I && vals.I !== '') doc.text(String(vals.I), 76.5, rowY + 4.5, { align: 'center' });
-        if (subj.cycles.II && vals.II !== '') doc.text(String(vals.II), 100, rowY + 4.5, { align: 'center' });
-        if (subj.cycles.III && vals.III !== '') doc.text(String(vals.III), 125, rowY + 4.5, { align: 'center' });
+        if (subj.cycles.I) doc.text(vals.I !== '' ? String(vals.I) : '--', 76.5, rowY + 4.5, { align: 'center' });
+        if (subj.cycles.II) doc.text(vals.II !== '' ? String(vals.II) : '--', 100, rowY + 4.5, { align: 'center' });
+        if (subj.cycles.III) doc.text(vals.III !== '' ? String(vals.III) : '--', 125, rowY + 4.5, { align: 'center' });
 
         const avgInfo = certComputedAverages.rows[subj.name];
         if (avgInfo && avgInfo.media !== null) {
@@ -2317,8 +2318,8 @@ export default function DeclaracoesCertificados({
           doc.text(avgInfo.extenso, 180.5, rowY + 4.5, { align: 'center' });
           doc.setFont('Helvetica', 'normal');
         } else {
-          doc.text('-', 152, rowY + 4.5, { align: 'center' });
-          doc.text('-', 180.5, rowY + 4.5, { align: 'center' });
+          doc.text('--', 152, rowY + 4.5, { align: 'center' });
+          doc.text('--', 180.5, rowY + 4.5, { align: 'center' });
         }
       }
 
@@ -2538,8 +2539,8 @@ export default function DeclaracoesCertificados({
     // Data rows
     activeDeclSubjects.forEach((subj, idx) => {
       const val = decGrades[subj];
-      const valText = val !== undefined && val !== '' ? String(val) : '_____';
-      const extText = val !== undefined && val !== '' ? `${notaParaExtenso(Number(val))} Valores` : '__________________';
+      const valText = val !== undefined && val !== '' ? String(val) : '--';
+      const extText = val !== undefined && val !== '' ? `${notaParaExtenso(Number(val))} Valores` : '--';
       const numVal = Number(val);
       const passingThreshold = numClass <= 6 ? 5 : 10;
       const isPos = val !== undefined && val !== '' && !isNaN(numVal) && numVal >= passingThreshold;

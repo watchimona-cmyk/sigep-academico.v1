@@ -282,7 +282,7 @@ export const CertificadoDocument: React.FC<CertificadoDocumentProps> = ({
                     const r = certComputedAverages.rows[subj.name];
 
                     const renderVal = (val: string | number) => {
-                      if (val === '') return '-';
+                      if (val === '' || val === null || val === undefined) return '--';
                       const num = Number(val);
                       if (isNaN(num)) return val;
                       const passingThreshold = subsistema === 'PRIMARIO' ? 5 : 10;
@@ -308,10 +308,10 @@ export const CertificadoDocument: React.FC<CertificadoDocumentProps> = ({
                           </td>
                         )}
                         <td className="border border-slate-300 p-1 text-center font-bold">
-                          {r && r.media !== null ? renderVal(r.media) : '-'}
+                          {r && r.media !== null ? renderVal(r.media) : '--'}
                         </td>
                         <td className="border border-slate-300 p-1 text-center font-medium text-[7.5px]">
-                          {r && r.extenso ? r.extenso : '-'}
+                          {r && r.extenso ? r.extenso : '--'}
                         </td>
                       </tr>
                     );
@@ -369,7 +369,7 @@ export const CertificadoDocument: React.FC<CertificadoDocumentProps> = ({
                           const v = punivGrades[sub] || { '10': '', '11': '', '12': '' };
                           const r = calcPunivSubjectAverage(sub);
                           const renderGrade = (val: string | number) => {
-                            if (val === '' || val === null || val === undefined) return '-';
+                            if (val === '' || val === null || val === undefined) return '--';
                             const num = Number(val);
                             if (isNaN(num)) return val;
                             return num >= 10 ? <span className="text-blue-600 font-bold">{val}</span> : <span className="text-red-600 font-bold">{val}</span>;
@@ -387,7 +387,7 @@ export const CertificadoDocument: React.FC<CertificadoDocumentProps> = ({
                                 {renderGrade(v['12'])}
                               </td>
                               <td className="border border-slate-300 p-1 text-center bg-indigo-50/20 font-black">
-                                {r !== null ? renderGrade(r) : '-'}
+                                {r !== null ? renderGrade(r) : '--'}
                               </td>
                             </tr>
                           );
@@ -456,7 +456,7 @@ export const CertificadoDocument: React.FC<CertificadoDocumentProps> = ({
                     const v = magisterioGrades[sub] || { '10': '', '11': '', '12': '', '13': '' };
                     const r = calcMagisterioSubjectAverage(sub);
                     const renderMagVal = (val: string | number) => {
-                      if (val === '' || val === null || val === undefined) return '-';
+                      if (val === '' || val === null || val === undefined) return '--';
                       const num = Number(val);
                       if (isNaN(num)) return val;
                       return num >= 10 ? <span className="text-blue-600 font-bold">{val}</span> : <span className="text-red-600 font-bold">{val}</span>;
@@ -468,8 +468,8 @@ export const CertificadoDocument: React.FC<CertificadoDocumentProps> = ({
                         <td className="text-center border-l border-slate-300 font-mono font-bold">{renderMagVal(v['11'])}</td>
                         <td className="text-center border-l border-slate-300 font-mono font-bold">{renderMagVal(v['12'])}</td>
                         <td className="text-center border-l border-slate-300 bg-slate-100 text-slate-400 font-mono">///</td>
-                        <td className="text-center border-l border-slate-300 font-mono font-black">{r ? renderMagVal(r) : '-'}</td>
-                        <td className="text-center border-l border-slate-300 italic text-[7.5px]">{r ? notaParaExtenso(r) : '-'}</td>
+                        <td className="text-center border-l border-slate-300 font-mono font-black">{r ? renderMagVal(r) : '--'}</td>
+                        <td className="text-center border-l border-slate-300 italic text-[7.5px]">{r ? notaParaExtenso(r) : '--'}</td>
                       </tr>
                     );
                   })}
@@ -482,7 +482,7 @@ export const CertificadoDocument: React.FC<CertificadoDocumentProps> = ({
                     const v = magisterioGrades[sub] || { '10': '', '11': '', '12': '', '13': '' };
                     const r = calcMagisterioSubjectAverage(sub);
                     const renderMagVal = (val: string | number) => {
-                      if (val === '' || val === null || val === undefined) return '-';
+                      if (val === '' || val === null || val === undefined) return '--';
                       const num = Number(val);
                       if (isNaN(num)) return val;
                       return num >= 10 ? <span className="text-blue-600 font-bold">{val}</span> : <span className="text-red-600 font-bold">{val}</span>;
@@ -494,8 +494,8 @@ export const CertificadoDocument: React.FC<CertificadoDocumentProps> = ({
                         <td className="text-center border-l border-slate-300 font-mono font-bold">{renderMagVal(v['11'])}</td>
                         <td className="text-center border-l border-slate-300 font-mono font-bold">{renderMagVal(v['12'])}</td>
                         <td className="text-center border-l border-slate-300 bg-slate-100 text-slate-400 font-mono">///</td>
-                        <td className="text-center border-l border-slate-300 font-mono font-black">{r ? renderMagVal(r) : '-'}</td>
-                        <td className="text-center border-l border-slate-300 italic text-[7.5px]">{r ? notaParaExtenso(r) : '-'}</td>
+                        <td className="text-center border-l border-slate-300 font-mono font-black">{r ? renderMagVal(r) : '--'}</td>
+                        <td className="text-center border-l border-slate-300 italic text-[7.5px]">{r ? notaParaExtenso(r) : '--'}</td>
                       </tr>
                     );
                   })}
@@ -507,24 +507,24 @@ export const CertificadoDocument: React.FC<CertificadoDocumentProps> = ({
                   <tr className="border border-slate-300">
                     <td className="p-1 font-semibold">NEC (Núcleo de Estágio Curricular)</td>
                     <td colSpan={3} className="bg-slate-100 text-center font-mono text-slate-400">///</td>
-                    <td className="text-center border-l border-slate-300 font-mono font-bold text-red-600">{notaEstagio || '-'}</td>
-                    <td className="text-center border-l border-slate-300 font-mono font-black text-red-700">{notaEstagio || '-'}</td>
-                    <td className="text-center border-l border-slate-300 italic text-[7.5px]">{notaEstagio ? notaParaExtenso(Number(notaEstagio)) : '-'}</td>
+                    <td className="text-center border-l border-slate-300 font-mono font-bold text-red-600">{notaEstagio || '--'}</td>
+                    <td className="text-center border-l border-slate-300 font-mono font-black text-red-700">{notaEstagio || '--'}</td>
+                    <td className="text-center border-l border-slate-300 italic text-[7.5px]">{notaEstagio ? notaParaExtenso(Number(notaEstagio)) : '--'}</td>
                   </tr>
                   <tr className="border border-slate-300">
                     <td className="p-1 font-semibold">PAP (Projecto de Aptidão Profissional)</td>
                     <td colSpan={3} className="bg-slate-100 text-center font-mono text-slate-400">///</td>
-                    <td className="text-center border-l border-slate-300 font-mono font-bold text-red-600">{notaPAP || '-'}</td>
-                    <td className="text-center border-l border-slate-300 font-mono font-black text-red-700">{notaPAP || '-'}</td>
-                    <td className="text-center border-l border-slate-300 italic text-[7.5px]">{notaPAP ? notaParaExtenso(Number(notaPAP)) : '-'}</td>
+                    <td className="text-center border-l border-slate-300 font-mono font-bold text-red-600">{notaPAP || '--'}</td>
+                    <td className="text-center border-l border-slate-300 font-mono font-black text-red-700">{notaPAP || '--'}</td>
+                    <td className="text-center border-l border-slate-300 italic text-[7.5px]">{notaPAP ? notaParaExtenso(Number(notaPAP)) : '--'}</td>
                   </tr>
 
                   {/* Média Anual */}
                   <tr className="font-bold uppercase border border-slate-300 bg-slate-50">
                     <td className="p-1">Média Anual (MA)</td>
-                    <td className="text-center font-mono text-slate-800">{calcMagisterioClassAverage('10') || '-'}</td>
-                    <td className="text-center font-mono text-slate-800">{calcMagisterioClassAverage('11') || '-'}</td>
-                    <td className="text-center font-mono text-slate-800">{calcMagisterioClassAverage('12') || '-'}</td>
+                    <td className="text-center font-mono text-slate-800">{calcMagisterioClassAverage('10') || '--'}</td>
+                    <td className="text-center font-mono text-slate-800">{calcMagisterioClassAverage('11') || '--'}</td>
+                    <td className="text-center font-mono text-slate-800">{calcMagisterioClassAverage('12') || '--'}</td>
                     <td colSpan={3} className="bg-slate-100"></td>
                   </tr>
 
@@ -532,8 +532,8 @@ export const CertificadoDocument: React.FC<CertificadoDocumentProps> = ({
                   <tr className="font-bold uppercase border border-slate-300 bg-slate-100">
                     <td className="p-1 italic">Média Final do Curso (MFC)</td>
                     <td colSpan={4} className="bg-slate-100"></td>
-                    <td className="text-center font-mono font-black text-red-700">{mediaFinalCurso || '-'}</td>
-                    <td className="text-center italic text-[7.5px]">{mediaFinalCurso ? notaParaExtenso(Number(mediaFinalCurso)).toUpperCase() : '-'}</td>
+                    <td className="text-center font-mono font-black text-red-700">{mediaFinalCurso || '--'}</td>
+                    <td className="text-center italic text-[7.5px]">{mediaFinalCurso ? notaParaExtenso(Number(mediaFinalCurso)).toUpperCase() : '--'}</td>
                   </tr>
                 </tbody>
               </table>

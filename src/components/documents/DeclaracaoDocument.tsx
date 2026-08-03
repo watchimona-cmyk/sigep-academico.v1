@@ -241,10 +241,10 @@ export const DeclaracaoDocument: React.FC<DeclaracaoDocumentProps> = ({
                   <tr key={subj} className={idx % 2 === 0 ? 'bg-white border-b border-slate-300' : 'bg-slate-50/60 border-b border-slate-300'}>
                     <td className="p-1.5 px-2.5 font-bold text-slate-900 border-r border-slate-300">{subj}</td>
                     <td className={`p-1.5 text-center border-r border-slate-300 ${gradeColorClass}`}>
-                      {val !== '' ? `${val}` : '_____'}
+                      {val !== '' ? `${val}` : '--'}
                     </td>
                     <td className={`p-1.5 text-center font-medium ${isPos ? 'text-blue-800' : isNeg ? 'text-red-800' : 'text-slate-800'}`}>
-                      {val !== '' ? `${notaParaExtenso(numVal)} Valores` : '__________________'}
+                      {val !== '' ? `${notaParaExtenso(numVal)} Valores` : '--'}
                     </td>
                   </tr>
                 );

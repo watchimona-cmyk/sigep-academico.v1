@@ -5,8 +5,8 @@ import { defineConfig } from 'vite';
 
 export default defineConfig(() => {
   return {
-    // Usar '/' por padrão para web / Cloud Run server e './' se for build específico do Electron
-    base: process.env.ELECTRON_BUILD === 'true' ? './' : '/', 
+    // Usar './' por padrão para suportar tanto servidor web Express quanto Electron local sem caminho absoluto
+    base: './', 
     
     plugins: [react(), tailwindcss()],
     

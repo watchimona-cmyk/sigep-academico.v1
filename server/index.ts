@@ -2049,7 +2049,8 @@ app.get('/api/health', async (req, res) => {
     client.release();
     res.json({ status: 'healthy', database: 'PostgreSQL connected', connected: true });
   } catch (err: any) {
-    res.status(500).json({ status: 'unhealthy', database: 'PostgreSQL offline', connected: false, error: err.message });
+    // Return status 200 with connected: false so main.js/health checks know Express is alive
+    res.status(200).json({ status: 'unhealthy', database: 'PostgreSQL offline', connected: false, error: err.message });
   }
 });
 
@@ -2065,7 +2066,10 @@ async function setupViteAndListen() {
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
+    // Robust resolution of dist directory inside packaged Electron or standalone Node
+    const distPath = fs.existsSync(path.join(__dirname, 'index.html'))
+      ? __dirname
+      : path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
@@ -2073,7 +2077,7 @@ async function setupViteAndListen() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Servidor SIGEP Centralizado rodando na porta ${PORT}`);
+    console.log(`Servidor SIGEP Centralizado rodando na porta ${PORT} (Acessível em LAN/Wi-Fi em 0.0.0.0)`);
   });
 }
 

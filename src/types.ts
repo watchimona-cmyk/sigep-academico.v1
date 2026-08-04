@@ -5,6 +5,8 @@
 
 export interface Student {
   id: string; // ID Aluno
+  studentId?: string; // ID Alternativo
+  registrationId?: string; // Nº de Matrícula
   name: string; // Nome Completo
   gender: 'M' | 'F'; // Sexo / Gênero
   class: string; // Classe (e.g. "1", "2")
@@ -12,6 +14,7 @@ export interface Student {
   fatherName?: string; // Nome do Pai
   motherName?: string; // Nome da Mãe
   bi?: string; // Bilhete de Identidade (BI)
+  biNumber?: string; // Aliás de BI
   biSector?: string; // Sector de Emissão do BI
   biDate?: string; // Data de Emissão do BI
   docType?: 'BI' | 'CEDULA'; // Tipo de Identificação
@@ -830,6 +833,7 @@ export interface StudentFinance {
   faltasInjustificadas?: number;
   faltasJustificadas?: number;
   faltasPagas?: number;
+  attendanceDates?: Record<string, 'NORMAL' | 'INJUSTIFICADA' | 'JUSTIFICADA'>;
 }
 
 export type UserRole = 'SUB_DIRECTOR_PEDAGOGICO' | 'SECRETARIO' | 'PROFESSOR';
@@ -841,6 +845,7 @@ export type StaffRole =
   | 'CHEFE_SECRETARIA'
   | 'COORDENADOR_TURNO'
   | 'COORDENADOR_DISCIPLINA'
+  | 'COORDENADOR'
   | 'PROFESSOR'
   | 'AUXILIAR_LIMPEZA'
   | 'SEGURANCA'
@@ -860,7 +865,7 @@ export interface Staff {
   is_root?: boolean; // flag de utilizador raiz do sistema
   is_editable?: boolean; // flag para imutabilidade do utilizador
   
-  // Campos extra de RH profissional
+  // Campos extra de RH profissional & Permissões do Director Geral
   gabinete?: string; // Chefias
   decretoNomeacao?: string; // Chefias
   tipoCoordenacao?: 'TURNO' | 'DISCIPLINA'; // Coordenadores
@@ -871,6 +876,10 @@ export interface Staff {
   postoGuarita?: string; // Segurança
   tipoEscalaVigilante?: string; // Segurança
   idColeteVigilante?: string; // Segurança
+
+  // Permissões de Acesso ao SIGEP delegadas pelo Director Geral
+  sigepAccessAllowed?: boolean; // Permissão de acesso ao SIGEP atribuída pelo Director Geral
+  sigepAbsenceAccessOnly?: boolean; // Acesso restrito única e exclusivamente para lançamento de faltas
 }
 
 export interface SchoolSettings {

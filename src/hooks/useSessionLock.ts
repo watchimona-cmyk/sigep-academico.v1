@@ -9,8 +9,9 @@ interface UseSessionLockProps {
 export function useSessionLock({ loggedInStaff, onLockStateChange }: UseSessionLockProps) {
   const [isLocked, setIsLocked] = useState<boolean>(() => {
     try {
-      if (!localStorage.getItem('sigep_logged_in_staff_v1')) return false;
-      return localStorage.getItem('sigep_session_locked_v1') === 'true';
+      const hasStaff = sessionStorage.getItem('sigep_logged_in_staff_v1') || localStorage.getItem('sigep_logged_in_staff_v1');
+      if (!hasStaff) return false;
+      return sessionStorage.getItem('sigep_session_locked_v1') === 'true' || localStorage.getItem('sigep_session_locked_v1') === 'true';
     } catch (e) {
       return false;
     }

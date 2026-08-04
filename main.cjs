@@ -9,6 +9,10 @@ const fs = require('fs');
 const http = require('http');
 const { autoUpdater } = require('electron-updater');
 
+if (app.isPackaged) {
+  process.env.NODE_ENV = 'production';
+}
+
 let mainWindow;
 let isQuitting = false;
 
@@ -16,17 +20,26 @@ let isQuitting = false;
 autoUpdater.autoDownload = false;
 
 function createWindow() {
+  const iconPath = path.join(__dirname, 'assets', 'icon.png');
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
-    title: "SiGeP Académico - SIGEP-Group",
-    icon: path.join(__dirname, 'assets', 'icon.png'),
+    title: "SIGEP-Académico",
+    ...(fs.existsSync(iconPath) ? { icon: iconPath } : {}),
     show: false, // Don't show until page is loaded or server is responding
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
       preload: path.join(__dirname, 'preload.js')
+    }
+  });
+
+  // Manter o título fixo em SIGEP-Académico
+  mainWindow.on('page-title-updated', (event) => {
+    event.preventDefault();
+    if (mainWindow) {
+      mainWindow.setTitle('SIGEP-Académico');
     }
   });
 

@@ -191,8 +191,8 @@ export default function StatsDashboard({
 
   // Gênero para Gráfico Circular
   const dataGenero = [
-    { name: 'Feminino (F)', value: feminino, color: '#a855f7' },
-    { name: 'Masculino (M)', value: masculino, color: '#4f46e5' }
+    { name: 'Masculino (M)', value: masculino, color: '#4f46e5' },
+    { name: 'Feminino (F)', value: feminino, color: '#a855f7' }
   ];
 
   // Fluxo de Transferências Mensal (Simulação Realista do Ano)
@@ -464,12 +464,12 @@ export default function StatsDashboard({
 
               <div className="grid grid-cols-2 gap-4 w-full mt-2 border-t border-slate-55 pb-2 pt-4">
                 <div className="text-center">
-                  <span className="text-[10px] text-purple-600 font-black uppercase">Feminino (F)</span>
-                  <div className="text-lg font-heading font-black text-purple-700">{feminino} <span className="text-[11px] text-slate-400 font-medium">({pctF}%)</span></div>
-                </div>
-                <div className="text-center">
                   <span className="text-[10px] text-indigo-600 font-black uppercase">Masculino (M)</span>
                   <div className="text-lg font-heading font-black text-indigo-700">{masculino} <span className="text-[11px] text-slate-400 font-medium">({pctM}%)</span></div>
+                </div>
+                <div className="text-center">
+                  <span className="text-[10px] text-purple-600 font-black uppercase">Feminino (F)</span>
+                  <div className="text-lg font-heading font-black text-purple-700">{feminino} <span className="text-[11px] text-slate-400 font-medium">({pctF}%)</span></div>
                 </div>
               </div>
             </div>

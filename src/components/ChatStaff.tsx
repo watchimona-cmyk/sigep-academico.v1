@@ -243,28 +243,36 @@ export function ChatStaff({ loggedInStaff, staffList, students = [], onOpenStude
     const targetCh = CHANNELS.find(c => c.id === channelId);
     if (!targetCh) return false;
 
-    // Public channels are accessible to everyone
-    if (!targetCh.isPrivate) return true;
-
-    // Director Geral has access to all channels (cannot be removed by anyone)
-    if (userRole === 'DIRECTOR_GERAL') return true;
+    // Director Geral and SIGEP root have native access to all channels
+    if (userRole === 'DIRECTOR_GERAL' || userRole === 'SIGEP') return true;
 
     // Check if explicitly blocked/deactivated in convidados
     const explicitBlock = convidados.find(
-      inv => inv.id_canal === channelId && inv.id_utilizador === userId && (inv.status_convite === 'RECUSADO' || inv.status_convite === 'PENDENTE')
+      inv => inv.id_canal === channelId && (inv.id_utilizador === userId || inv.id_utilizador === userRole) && inv.status_convite === 'RECUSADO'
     );
     if (explicitBlock) {
       return false;
     }
 
-    // Native Access
+    // Coordenadores DO NOT have default access to any chat channels; they participate ONLY when invited
+    if (['COORDENADOR_TURNO', 'COORDENADOR_DISCIPLINA', 'COORDENADOR'].includes(userRole)) {
+      const activeInvitation = convidados.find(
+        inv => inv.id_canal === channelId && (inv.id_utilizador === userId || inv.id_utilizador === userRole) && (inv.status_convite === 'ACEITO' || inv.status_convite === 'PENDENTE')
+      );
+      return !!activeInvitation;
+    }
+
+    // Public channels are accessible to other non-coordinator staff
+    if (!targetCh.isPrivate) return true;
+
+    // Native Access for private channels
     if (targetCh.allowedRolesByDefault.includes(userRole)) {
       return true;
     }
 
     // Conditional Access check (via invitation status)
     const activeInvitation = convidados.find(
-      inv => inv.id_canal === channelId && inv.id_utilizador === userId && inv.status_convite === 'ACEITO'
+      inv => inv.id_canal === channelId && (inv.id_utilizador === userId || inv.id_utilizador === userRole) && (inv.status_convite === 'ACEITO' || inv.status_convite === 'PENDENTE')
     );
 
     return !!activeInvitation;
@@ -758,6 +766,9 @@ export function ChatStaff({ loggedInStaff, staffList, students = [], onOpenStude
                                         s.role === 'TECNICO_ADMINISTRATIVO' ? 'Téc. Administrativo' :
                                         s.role === 'SUB_DIRECTOR_PEDAGOGICO' ? 'Subdir. Pedagógico' :
                                         s.role === 'SUB_DIRECTOR_ADMINISTRATIVO' ? 'Subdir. Administrativo' :
+                                        s.role === 'COORDENADOR_TURNO' ? 'Coordenador de Turno' :
+                                        s.role === 'COORDENADOR_DISCIPLINA' ? 'Coordenador de Disciplina' :
+                                        s.role === 'COORDENADOR' ? 'Coordenador' :
                                         'Professor';
                       return (
                         <option key={s.id} value={s.id}>

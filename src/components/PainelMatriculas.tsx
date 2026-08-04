@@ -155,8 +155,9 @@ export default function PainelMatriculas({
       }
       setNewPeriod(mappedPeriod);
 
-      if (initialPrefilledCandidate.birthDate) {
-        setNewBirthDate(initialPrefilledCandidate.birthDate);
+      const prefilledBirth = initialPrefilledCandidate.birthDate || (initialPrefilledCandidate as any).candBirthDate || (initialPrefilledCandidate as any).birth_date;
+      if (prefilledBirth) {
+        setNewBirthDate(prefilledBirth);
       }
       setFormStep(1);
       setFormError('');
@@ -977,7 +978,7 @@ export default function PainelMatriculas({
     setNewClass(cand.selectedClass || '1');
     setNewForeignLanguage(cand.foreignLanguage || 'INGLÊS');
     setNewGender(cand.gender || '');
-    setNewBirthDate(cand.birthDate || '');
+    setNewBirthDate(cand.birthDate || (cand as any).candBirthDate || (cand as any).birth_date || '');
     setNewProvince(cand.province || '');
     setNewNaturalidade(cand.naturalidade || '');
     setNewContact(cand.contact || '');
@@ -1280,6 +1281,11 @@ export default function PainelMatriculas({
       id: candidateId,
       name: formatarNomeProprio(newName),
       gender: newGender,
+      docType: newDocType,
+      bi: newDocType === 'BI' ? newBi.trim() : undefined,
+      cedulaRegisto: newDocType === 'CEDULA' ? newCedulaRegisto.trim() : undefined,
+      docNumber: newDocType === 'BI' ? newBi.trim() : newCedulaRegisto.trim(),
+      birthDate: newBirthDate,
       class: newClass,
       section: newSection,
       fatherName: formatarNomeProprio(newFatherName),

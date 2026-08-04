@@ -4,7 +4,13 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import { exec } from 'child_process';
+import { fileURLToPath } from 'url';
+
+const appDir = typeof __dirname !== 'undefined'
+  ? __dirname
+  : path.dirname(fileURLToPath(import.meta.url));
 
 dotenv.config();
 
@@ -156,6 +162,27 @@ async function executeFallbackQuery(sqlText: string, params?: any[]): Promise<an
     const db = loadFallbackDb();
     const count = db.funcionarios.filter(f => f.role === 'DIRECTOR_GERAL').length;
     return { rows: [{ count: String(count) }] };
+  }
+
+  // 4. Select staff by ID (case-insensitive query with WHERE)
+  if (/select\s+\*\s+from\s+funcionarios\s+where/i.test(sqlLower)) {
+    const db = loadFallbackDb();
+    const searchId = String(params?.[0] || '').trim().toUpperCase();
+    const matches = db.funcionarios.filter(f => String(f.id || '').trim().toUpperCase() === searchId);
+    return { rows: matches };
+  }
+
+  // 5. Select student by ID, process_number, or bi_number (case-insensitive query with WHERE)
+  if (/select\s+\*\s+from\s+alunos\s+where/i.test(sqlLower)) {
+    const db = loadFallbackDb();
+    const searchVal = String(params?.[0] || '').trim().toUpperCase();
+    const matches = db.alunos.filter(a => 
+      String(a.id || '').trim().toUpperCase() === searchVal ||
+      String(a.process_number || '').trim().toUpperCase() === searchVal ||
+      String(a.bi_number || '').trim().toUpperCase() === searchVal ||
+      String(a.bi || '').trim().toUpperCase() === searchVal
+    );
+    return { rows: matches };
   }
 
   // 4. Select students ordered by name
@@ -664,6 +691,110 @@ app.get('/api/auth/check-director', async (req, res) => {
   }
 });
 
+app.post('/api/auth/login', async (req, res) => {
+  const { id, password } = req.body;
+  if (!id) {
+    return res.status(400).json({ success: false, error: 'Por favor, digite o seu ID de acesso.' });
+  }
+
+  const cleanId = String(id).trim().toUpperCase();
+  const inputPassword = password ? String(password).trim() : '';
+
+  // 1. Administrador SIGEP (Suporte Master / Root)
+  if (cleanId === 'SIGEP' || cleanId === 'ADMIN_SIGEP' || cleanId === 'SG123') {
+    if (inputPassword === 'sigepwl' || (cleanId === 'SG123' && inputPassword === 'admin')) {
+      return res.json({
+        success: true,
+        type: 'staff',
+        staff: {
+          id: 'SIGEP',
+          name: 'Administrador SIGEP (Suporte Master)',
+          role: 'SIGEP',
+          password: inputPassword,
+          is_root: true,
+          is_editable: false
+        }
+      });
+    } else {
+      return res.status(401).json({ success: false, error: 'Senha incorreta para a conta Administrador SIGEP.' });
+    }
+  }
+
+  try {
+    // 2. Consulta tabela de funcionários no PostgreSQL e Fallback DB (ID insensível a maiúsculas/espaços)
+    const staffRes = await pool.query('SELECT * FROM funcionarios WHERE UPPER(TRIM(id)) = $1 OR UPPER(TRIM(id)) = $2', [cleanId, cleanId.replace(/\s+/g, '')]);
+    let staffRow = staffRes.rows.length > 0 ? staffRes.rows[0] : null;
+
+    if (!staffRow) {
+      try {
+        const fallbackData = loadFallbackDb();
+        if (fallbackData && Array.isArray(fallbackData.funcionarios)) {
+          staffRow = fallbackData.funcionarios.find((f: any) => 
+            String(f.id || '').trim().toUpperCase() === cleanId || 
+            String(f.id || '').trim().toUpperCase() === cleanId.replace(/\s+/g, '')
+          );
+        }
+      } catch (fErr) {
+        // Ignorar erro do fallback db
+      }
+    }
+
+    if (staffRow) {
+      const correctSecret = staffRow.password || '12345';
+      if (inputPassword === correctSecret) {
+        return res.json({
+          success: true,
+          type: 'staff',
+          staff: {
+            id: staffRow.id,
+            name: staffRow.name,
+            role: staffRow.role,
+            subject: staffRow.subject || '',
+            contact: staffRow.contact || '',
+            status: staffRow.status || 'Activo',
+            password: staffRow.password || '12345',
+            is_root: staffRow.is_root || false,
+            is_editable: staffRow.is_editable ?? true
+          }
+        });
+      } else {
+        return res.status(401).json({ success: false, error: `Senha incorreta para o utilizador ${cleanId}.` });
+      }
+    }
+
+    // 3. Consulta tabela de alunos no PostgreSQL (por ID, processo ou BI)
+    const studentRes = await pool.query(
+      'SELECT * FROM alunos WHERE UPPER(id) = $1 OR UPPER(process_number) = $1 OR UPPER(bi_number) = $1',
+      [cleanId]
+    );
+    if (studentRes.rows.length > 0) {
+      const studentRow = studentRes.rows[0];
+      // Para alunos, acesso direto via ID
+      return res.json({
+        success: true,
+        type: 'student',
+        student: {
+          id: studentRow.id,
+          name: studentRow.name,
+          class: studentRow.class,
+          section: studentRow.section,
+          status: studentRow.status,
+          contact: studentRow.contact
+        }
+      });
+    }
+
+    // 4. Se não existe na base de dados
+    return res.status(404).json({
+      success: false,
+      error: `ID "${cleanId}" não cadastrado no sistema. Contacte o Diretor Geral ou os Recursos Humanos.`
+    });
+  } catch (err: any) {
+    console.error('Erro na autenticação central:', err);
+    return res.status(500).json({ success: false, error: 'Erro de ligação à base de dados central.' });
+  }
+});
+
 app.post('/api/auth/maintenance-login', async (req, res) => {
   const { id, password, isMaintenanceMode } = req.body;
   
@@ -958,7 +1089,15 @@ app.post('/api/funcionarios', async (req, res) => {
         contact = EXCLUDED.contact,
         status = EXCLUDED.status,
         password = EXCLUDED.password
-    `, [id, name, role, subject, contact, status, password]);
+    `, [
+      id,
+      name || 'Funcionário',
+      role || 'PROFESSOR',
+      subject || '',
+      contact || '',
+      status || 'Activo',
+      password || '12345'
+    ]);
     res.json({ success: true });
   } catch (err: any) {
     console.error('Erro ao gravar funcionário:', err);
@@ -974,8 +1113,8 @@ app.post('/api/funcionarios/sync', async (req, res) => {
   try {
     await pool.query('BEGIN');
     for (const record of staff) {
-      if (record.id && (record.id.trim().toUpperCase() === 'SIGEP' || record.id.trim().toUpperCase() === 'ADMIN_SIGEP')) {
-        continue; // Ignorar actualização de Administrador SIGEP
+      if (!record.id || record.id.trim().toUpperCase() === 'SIGEP' || record.id.trim().toUpperCase() === 'ADMIN_SIGEP') {
+        continue; // Ignorar actualização de Administrador SIGEP ou registo sem ID
       }
       await pool.query(`
         INSERT INTO funcionarios (id, name, role, subject, contact, status, password)
@@ -989,12 +1128,12 @@ app.post('/api/funcionarios/sync', async (req, res) => {
           password = EXCLUDED.password
       `, [
         record.id,
-        record.name,
-        record.role,
-        record.subject,
-        record.contact,
-        record.status,
-        record.password
+        record.name || 'Funcionário',
+        record.role || 'PROFESSOR',
+        record.subject || '',
+        record.contact || '',
+        record.status || 'Activo',
+        record.password || '12345'
       ]);
     }
     await pool.query('COMMIT');
@@ -2044,31 +2183,36 @@ app.get('/api/comprovativos/:id', async (req, res) => {
 // Standard Health endpoint
 app.get('/api/health', async (req, res) => {
   try {
-    const client = await pool.connect();
+    const client = await originalConnect();
     await client.query('SELECT 1');
     client.release();
-    res.json({ status: 'healthy', database: 'PostgreSQL connected', connected: true });
+    isPostgresAvailable = true;
+    res.json({ 
+      status: 'healthy', 
+      database: 'PostgreSQL connected', 
+      connected: true,
+      mode: 'POSTGRESQL'
+    });
   } catch (err: any) {
-    // Return status 200 with connected: false so main.js/health checks know Express is alive
-    res.status(200).json({ status: 'unhealthy', database: 'PostgreSQL offline', connected: false, error: err.message });
+    isPostgresAvailable = false;
+    res.status(200).json({ 
+      status: 'healthy', 
+      database: 'JSON Fallback Engine Active (PostgreSQL Offline)', 
+      connected: false, 
+      mode: 'JSON_FALLBACK',
+      error: err.message 
+    });
   }
 });
 
 // Configure Vite middleware or static files serving
 async function setupViteAndListen() {
   const PORT = 3000; // MUST run on port 3000 as per environment constraints
+  const isProduction = process.env.NODE_ENV === "production" || fs.existsSync(path.join(appDir, 'index.html'));
   
-  if (process.env.NODE_ENV !== "production") {
-    const { createServer: createViteServer } = await import('vite');
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-  } else {
-    // Robust resolution of dist directory inside packaged Electron or standalone Node
-    const distPath = fs.existsSync(path.join(__dirname, 'index.html'))
-      ? __dirname
+  function serveStatic() {
+    const distPath = fs.existsSync(path.join(appDir, 'index.html'))
+      ? appDir
       : path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
@@ -2076,8 +2220,52 @@ async function setupViteAndListen() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Servidor SIGEP Centralizado rodando na porta ${PORT} (Acessível em LAN/Wi-Fi em 0.0.0.0)`);
+  if (!isProduction) {
+    try {
+      const { createServer: createViteServer } = await import('vite');
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: "spa",
+      });
+      app.use(vite.middlewares);
+    } catch (err) {
+      console.warn('Vite middleware não disponível, servindo arquivos estáticos:', err);
+      serveStatic();
+    }
+  } else {
+    serveStatic();
+  }
+
+  const serverInstance = app.listen(PORT, '0.0.0.0', () => {
+    console.log(`\n==================================================`);
+    console.log(`🚀 SERVIDOR SIGEP CENTRALIZADO ATIVO NA PORTA ${PORT}`);
+    console.log(`--------------------------------------------------`);
+    console.log(`Acesse nos outros computadores/celulares via Wi-Fi/LAN:`);
+    
+    const interfaces = os.networkInterfaces();
+    let foundIp = false;
+    for (const name of Object.keys(interfaces)) {
+      for (const net of interfaces[name] || []) {
+        if (net.family === 'IPv4' && !net.internal) {
+          console.log(`  👉 http://${net.address}:${PORT}`);
+          foundIp = true;
+        }
+      }
+    }
+    if (!foundIp) {
+      console.log(`  👉 http://localhost:${PORT}`);
+    }
+    console.log(`==================================================\n`);
+  });
+
+  serverInstance.on('error', (err: any) => {
+    if (err.code === 'EADDRINUSE') {
+      console.log(`\n⚠️  ATENÇÃO: A porta ${PORT} já está em uso por outro processo!`);
+      console.log(`Se o servidor antigo ficou travado em segundo plano, execute no Terminal Windows:`);
+      console.log(`  taskkill /F /IM node.exe   (ou feche a outra janela do terminal/Electron)\n`);
+    } else {
+      console.error("Erro no servidor Express:", err);
+    }
   });
 }
 

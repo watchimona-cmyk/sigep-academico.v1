@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import * as XLSX from 'xlsx';
-import { Student, GradeRow, ActiveSheet, SubjectType, UserRole, SchoolSettings, Staff, getSubjectsForClass, getSubjectsForStudent, getSubjectAbbreviation, ModalityType, SUBJECTS, carregarGrelhaCurricular } from './types';
+import { Student, GradeRow, ActiveSheet, SubjectType, UserRole, SchoolSettings, Staff, StudentFinance, getSubjectsForClass, getSubjectsForStudent, getSubjectAbbreviation, ModalityType, SUBJECTS, carregarGrelhaCurricular } from './types';
 import { INITIAL_STUDENTS, generateInitialGrades, INITIAL_STAFF } from './initialData';
 import PainelMatriculas from './components/PainelMatriculas';
 import RawGradesDatabase from './components/RawGradesDatabase';
@@ -74,6 +74,7 @@ import {
 import SeccaoFinanceira from './components/SeccaoFinanceira';
 import Student360Modal from './components/Student360Modal';
 import DirectorGeneralPanel, { AuditLog, RolePermission } from './components/DirectorGeneralPanel';
+import PainelAlertasChefia from './components/PainelAlertasChefia';
 import RelatoriosPanel from './components/RelatoriosPanel';
 import ChatStaff from './components/ChatStaff';
 import AcademicArea from './components/AcademicArea';
@@ -183,9 +184,39 @@ const safeRemoveItem = (key: string) => {
   }
 };
 
+// Safely write to / read from / remove from sessionStorage so closing Electron window destroys active login session
+const safeGetSessionItem = (key: string): string | null => {
+  try {
+    return sessionStorage.getItem(key);
+  } catch (e) {
+    console.warn("Session storage access is blocked or unavailable:", e);
+    return null;
+  }
+};
+
+const safeSetSessionItem = (key: string, value: string) => {
+  try {
+    sessionStorage.setItem(key, value);
+  } catch (e) {
+    console.warn("Session storage access is blocked or unavailable:", e);
+  }
+};
+
+const safeRemoveSessionItem = (key: string) => {
+  try {
+    sessionStorage.removeItem(key);
+  } catch (e) {
+    console.warn("Session storage access is blocked or unavailable:", e);
+  }
+};
+
 export default function App() {
   // EULA States
   const [eulaAccepted, setEulaAccepted] = useState<boolean>(() => {
+    const isNetworkAccess = typeof window !== 'undefined' && 
+      window.location.hostname !== 'localhost' && 
+      window.location.hostname !== '127.0.0.1';
+    if (isNetworkAccess) return true;
     return safeGetItem('sigep_eula_accepted_v1') === 'true';
   });
   const [eulaDeclined, setEulaDeclined] = useState<boolean>(false);
@@ -282,13 +313,56 @@ export default function App() {
     return grades.filter(row => studentIds.has(row.studentId));
   }, [grades, hermeticStudents]);
 
+  const propinasRecords = useMemo<StudentFinance[]>(() => {
+    const saved = safeGetItem('sigep_propinas_v1');
+    let records: StudentFinance[] = [];
+    if (saved) {
+      try {
+        records = JSON.parse(saved);
+      } catch (e) {
+        records = [];
+      }
+    }
+    const recordMap = new Map(records.map(r => [r.id, r]));
+    return hermeticStudents.map(student => {
+      const existing = recordMap.get(student.id);
+      if (existing) {
+        return {
+          ...existing,
+          name: student.name,
+          class: student.class,
+          section: student.section,
+          periodo: student.periodo
+        };
+      }
+      return {
+        id: student.id,
+        name: student.name,
+        class: student.class,
+        section: student.section,
+        periodo: student.periodo || 'Manhã',
+        modalidade: 'Regular',
+        desconto: '0%',
+        mesesPagos: Array(11).fill(false),
+        totalPago: 0,
+        totalDivida: 0,
+        dataUltimoPg: '',
+        observacoes: '',
+        faltasInjustificadas: 0,
+        faltasJustificadas: 0,
+        faltasPagas: 0
+      };
+    });
+  }, [hermeticStudents]);
+
   const [activeTab, setActiveTab] = useState<ActiveSheet>(() => {
     const savedTab = safeGetItem('sigep_active_tab_v1') as ActiveSheet | null;
     return savedTab || 'HOME';
   });
 
   const [loggedInStaff, setLoggedInStaff] = useState<Staff | null>(() => {
-    const saved = safeGetItem(LOCAL_STORAGE_LOGGED_IN_STAFF_KEY);
+    // Session-based auth: read from sessionStorage so closing window destroys the active login session
+    const saved = safeGetSessionItem(LOCAL_STORAGE_LOGGED_IN_STAFF_KEY);
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
@@ -296,14 +370,16 @@ export default function App() {
           return parsed;
         }
       } catch (e) {
-        console.warn("Error parsing saved logged-in staff:", e);
+        console.warn("Error parsing saved logged-in staff session:", e);
       }
     }
+    // Remove lingering legacy session from localStorage to ensure exit forces re-authentication
+    safeRemoveItem(LOCAL_STORAGE_LOGGED_IN_STAFF_KEY);
     return null;
   });
 
   const [userRole, setUserRole] = useState<UserRole>(() => {
-    const saved = safeGetItem(LOCAL_STORAGE_LOGGED_IN_STAFF_KEY);
+    const saved = safeGetSessionItem(LOCAL_STORAGE_LOGGED_IN_STAFF_KEY);
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
@@ -339,6 +415,15 @@ export default function App() {
       safeSetItem('sigep_active_tab_v1', activeTab);
     }
   }, [activeTab]);
+
+  // Redirecionamento automático e restrição de ecrã para perfil de Coordenação (acesso exclusivo à janela Financeira)
+  useEffect(() => {
+    if (loggedInStaff && ['COORDENADOR_TURNO', 'COORDENADOR_DISCIPLINA', 'COORDENADOR'].includes(loggedInStaff.role)) {
+      if (activeTab === 'HOME') {
+        setActiveTab('FINANCEIRO');
+      }
+    }
+  }, [loggedInStaff, activeTab]);
   const [isStudentPortalActive, setIsStudentPortalActive] = useState<boolean>(false);
   const [dbConnected, setDbConnected] = useState<boolean | null>(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState<boolean>(false);
@@ -1178,7 +1263,13 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
   };
 
   const pullData = async (settingsToUse = schoolSettings) => {
-    const url = settingsToUse.syncServerUrl || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000');
+    let url = settingsToUse.syncServerUrl || '';
+    if (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+      if (url.includes('localhost') || url.includes('127.0.0.1')) {
+        url = '';
+      }
+    }
+
     setVbaLog("Buscando dados remotos do PostgreSQL central...");
 
     // Alunos
@@ -1229,52 +1320,82 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
     setVbaLog("Importação concluída: Todos os dados foram atualizados a partir do PostgreSQL!");
   };
 
-  // Automatic Sync Pull on Mount
+  // Automatic Sync Pull on Mount (Garante que qualquer navegador cliente no Wi-Fi/LAN receba os dados do Servidor Central)
   useEffect(() => {
     const autoPullOnStart = async () => {
-      const savedSettings = safeGetItem(LOCAL_STORAGE_SCHOOL_SETTINGS_KEY);
-      if (!savedSettings) return;
       try {
-        const parsed = JSON.parse(savedSettings);
-        if (parsed && parsed.syncEnabled && parsed.syncServerUrl) {
-          setVbaLog("Sincronização Automática: Baixando dados mais recentes do Servidor PostgreSQL central...");
-          const url = parsed.syncServerUrl;
-          
-          // Alunos
-          const resAlunos = await fetch(`${url}/api/alunos`);
-          if (resAlunos.ok) {
-            const gotStudents = await resAlunos.json();
-            setStudents(gotStudents);
-            safeSetItem(LOCAL_STORAGE_STUDENTS_KEY, JSON.stringify(gotStudents));
+        let baseUrl = schoolSettings.syncEnabled && schoolSettings.syncServerUrl ? schoolSettings.syncServerUrl : '';
+        if (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+          if (baseUrl.includes('localhost') || baseUrl.includes('127.0.0.1')) {
+            baseUrl = '';
           }
-
-          // Notas
-          const resNotas = await fetch(`${url}/api/notas`);
-          if (resNotas.ok) {
-            const gotGrades = await resNotas.json();
-            setGrades(gotGrades);
-            safeSetItem(LOCAL_STORAGE_GRADES_KEY, JSON.stringify(gotGrades));
-          }
-
-          // Funcionários
-          const resStaff = await fetch(`${url}/api/funcionarios`);
-          if (resStaff.ok) {
-            const gotStaff = await resStaff.json();
+        }
+        
+        // 1. Funcionários
+        let resStaff = await fetch(`${baseUrl}/api/funcionarios`).catch(() => null);
+        if ((!resStaff || !resStaff.ok) && baseUrl !== '') {
+          resStaff = await fetch('/api/funcionarios').catch(() => null);
+        }
+        if (resStaff && resStaff.ok) {
+          const gotStaff = await resStaff.json();
+          if (Array.isArray(gotStaff) && gotStaff.length > 0) {
             setStaffList(gotStaff);
             safeSetItem(LOCAL_STORAGE_STAFF_KEY, JSON.stringify(gotStaff));
           }
-
-          // Propinas
-          const resPropinas = await fetch(`${url}/api/propinas`);
-          if (resPropinas.ok) {
-            const gotPropinas = await resPropinas.json();
-            safeSetItem('sigep_propinas_v1', JSON.stringify(gotPropinas));
-          }
-
-          setVbaLog("Sincronização Automática: Todos os dados foram atualizados com sucesso via PostgreSQL!");
         }
+
+        // 2. Alunos
+        let resAlunos = await fetch(`${baseUrl}/api/alunos`).catch(() => null);
+        if ((!resAlunos || !resAlunos.ok) && baseUrl !== '') {
+          resAlunos = await fetch('/api/alunos').catch(() => null);
+        }
+        if (resAlunos && resAlunos.ok) {
+          const gotStudents = await resAlunos.json();
+          if (Array.isArray(gotStudents) && gotStudents.length > 0) {
+            setStudents(gotStudents);
+            safeSetItem(LOCAL_STORAGE_STUDENTS_KEY, JSON.stringify(gotStudents));
+          }
+        }
+
+        // 3. Notas
+        let resNotas = await fetch(`${baseUrl}/api/notas`).catch(() => null);
+        if ((!resNotas || !resNotas.ok) && baseUrl !== '') {
+          resNotas = await fetch('/api/notas').catch(() => null);
+        }
+        if (resNotas && resNotas.ok) {
+          const gotGrades = await resNotas.json();
+          if (Array.isArray(gotGrades) && gotGrades.length > 0) {
+            setGrades(gotGrades);
+            safeSetItem(LOCAL_STORAGE_GRADES_KEY, JSON.stringify(gotGrades));
+          }
+        }
+
+        // 4. Propinas
+        let resPropinas = await fetch(`${baseUrl}/api/propinas`).catch(() => null);
+        if ((!resPropinas || !resPropinas.ok) && baseUrl !== '') {
+          resPropinas = await fetch('/api/propinas').catch(() => null);
+        }
+        if (resPropinas && resPropinas.ok) {
+          const gotPropinas = await resPropinas.json();
+          safeSetItem('sigep_propinas_v1', JSON.stringify(gotPropinas));
+        }
+
+        // 5. Configuração da Escola
+        let resConfig = await fetch(`${baseUrl}/api/config`).catch(() => null);
+        if ((!resConfig || !resConfig.ok) && baseUrl !== '') {
+          resConfig = await fetch('/api/config').catch(() => null);
+        }
+        if (resConfig && resConfig.ok) {
+          const gotConfig = await resConfig.json();
+          if (gotConfig && gotConfig.schoolSettings) {
+            setSchoolSettings(prev => ({ ...prev, ...gotConfig.schoolSettings }));
+            safeSetItem(LOCAL_STORAGE_SCHOOL_SETTINGS_KEY, JSON.stringify(gotConfig.schoolSettings));
+          }
+        }
+
+        setVbaLog("Sincronização Automática: Todos os dados foram atualizados com sucesso a partir do Servidor Central!");
       } catch (err: any) {
-        setVbaLog(`Aviso de Sincronização: Não foi possível conectar ao Servidor PostgreSQL (${err.message}). Executando no modo local offline.`);
+        setVbaLog(`Aviso de Sincronização: Executando no modo local offline.`);
       }
     };
 
@@ -1317,9 +1438,11 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
 
   const handleLoginSuccess = (staff: Staff) => {
     setLoggedInStaff(staff);
-    safeSetItem(LOCAL_STORAGE_LOGGED_IN_STAFF_KEY, JSON.stringify(staff));
+    safeSetSessionItem(LOCAL_STORAGE_LOGGED_IN_STAFF_KEY, JSON.stringify(staff));
+    safeRemoveItem(LOCAL_STORAGE_LOGGED_IN_STAFF_KEY);
     try {
       localStorage.removeItem('sigep_session_locked_v1');
+      sessionStorage.removeItem('sigep_session_locked_v1');
     } catch (e) {}
 
     // set appropriate role simulation
@@ -1384,7 +1507,9 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
     // 2. Invalidação imediata do token / credencial de sessão
     setLoggedInStaff(null);
     try {
-      localStorage.removeItem(LOCAL_STORAGE_LOGGED_IN_STAFF_KEY);
+      safeRemoveSessionItem(LOCAL_STORAGE_LOGGED_IN_STAFF_KEY);
+      safeRemoveItem(LOCAL_STORAGE_LOGGED_IN_STAFF_KEY);
+      sessionStorage.removeItem('sigep_session_locked_v1');
       localStorage.removeItem('sigep_session_locked_v1');
       localStorage.removeItem('sigep_active_tab_v1');
     } catch (e) {
@@ -1488,8 +1613,11 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
     setStaffList(updated);
     safeSetItem(LOCAL_STORAGE_STAFF_KEY, JSON.stringify(updated));
 
+    // Sempre apagar no backend local
+    fetch(`/api/funcionarios/${id}`, { method: 'DELETE' }).catch(() => null);
+
     if (schoolSettings.syncEnabled && schoolSettings.syncServerUrl) {
-      // Delete from PostgreSQL server
+      // Delete from remote PostgreSQL server
       fetch(`${schoolSettings.syncServerUrl}/api/funcionarios/${id}`, {
         method: 'DELETE'
       }).catch(err => console.warn("Erro ao apagar funcionario no Postgres:", err));
@@ -1505,6 +1633,13 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
       setLoggedInStaff(updatedLoggedIn);
       safeSetItem(LOCAL_STORAGE_LOGGED_IN_STAFF_KEY, JSON.stringify(updatedLoggedIn));
     }
+
+    // Sempre sincronizar a nova senha com o servidor Express local (PostgreSQL)
+    fetch('/api/funcionarios/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updated)
+    }).catch(err => console.warn("Erro ao sincronizar senha no backend local:", err));
 
     if (schoolSettings.syncEnabled && schoolSettings.syncServerUrl) {
       fetch(`${schoolSettings.syncServerUrl}/api/funcionarios/sync`, {
@@ -2212,6 +2347,10 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
         schoolSettings={schoolSettings}
         onLoginSuccess={handleLoginSuccess}
         onOpenStudentPortal={() => setIsStudentPortalActive(true)}
+        onRefreshStaff={(updated) => {
+          setStaffList(updated);
+          safeSetItem(LOCAL_STORAGE_STAFF_KEY, JSON.stringify(updated));
+        }}
       />
     );
   }
@@ -2438,8 +2577,17 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
                 const isRootSigep = loggedInStaff && (loggedInStaff.role === 'SIGEP' || loggedInStaff.is_root || loggedInStaff.id === 'SIGEP' || loggedInStaff.id === 'ADMIN_SIGEP');
 
                 if (!isRootSigep) {
-                  // 1. Filter by global role restriction (Principle of Least Privilege)
-                  if (menu.rolesAllowed && loggedInStaff && !menu.rolesAllowed.includes(loggedInStaff.role)) {
+                  // Special check for Chat: Coordinators only see Chat if explicitly invited
+                  if (menu.id === 'COMUNICACAO' && loggedInStaff && ['COORDENADOR_TURNO', 'COORDENADOR_DISCIPLINA', 'COORDENADOR'].includes(loggedInStaff.role)) {
+                    const savedConv = localStorage.getItem('sigep_canais_convidados_v1');
+                    const convList = savedConv ? JSON.parse(savedConv) : [];
+                    const hasInvite = Array.isArray(convList) && convList.some((inv: any) => 
+                      (inv.id_utilizador === loggedInStaff.id || inv.id_utilizador === loggedInStaff.role) && 
+                      (inv.status_convite === 'ACEITO' || inv.status_convite === 'PENDENTE')
+                    );
+                    if (!hasInvite) return null;
+                  } else if (menu.rolesAllowed && loggedInStaff && !menu.rolesAllowed.includes(loggedInStaff.role)) {
+                    // 1. Filter by global role restriction (Principle of Least Privilege)
                     return null;
                   }
 
@@ -2734,7 +2882,7 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
               <button
                 id="top-action-logout"
                 type="button"
-                onClick={handleLogout}
+                onClick={() => handleLogout()}
                 className="px-3 py-1.5 text-xs font-black rounded-lg flex items-center gap-1.5 bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white border border-rose-700 transition-all cursor-pointer shadow-xs shrink-0"
                 title="Encerrar Sessão com segurança no SIGEP"
               >
@@ -2757,9 +2905,19 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
                   // Permission check
                   const userRoleResolved = loggedInStaff?.role || userRole;
                   const isRootSigep = (loggedInStaff && (loggedInStaff.role === 'SIGEP' || loggedInStaff.is_root || loggedInStaff.id === 'SIGEP' || loggedInStaff.id === 'ADMIN_SIGEP')) || userRoleResolved === 'SIGEP';
-                  if (!isRootSigep && menu.rolesAllowed && menu.rolesAllowed.length > 0) {
-                    if (!menu.rolesAllowed.includes(userRoleResolved)) {
-                      return null;
+                  if (!isRootSigep) {
+                    if (menu.id === 'COMUNICACAO' && loggedInStaff && ['COORDENADOR_TURNO', 'COORDENADOR_DISCIPLINA', 'COORDENADOR'].includes(userRoleResolved)) {
+                      const savedConv = localStorage.getItem('sigep_canais_convidados_v1');
+                      const convList = savedConv ? JSON.parse(savedConv) : [];
+                      const hasInvite = Array.isArray(convList) && convList.some((inv: any) => 
+                        (inv.id_utilizador === loggedInStaff.id || inv.id_utilizador === loggedInStaff.role) && 
+                        (inv.status_convite === 'ACEITO' || inv.status_convite === 'PENDENTE')
+                      );
+                      if (!hasInvite) return null;
+                    } else if (menu.rolesAllowed && menu.rolesAllowed.length > 0) {
+                      if (!menu.rolesAllowed.includes(userRoleResolved)) {
+                        return null;
+                      }
                     }
                   }
 
@@ -3065,14 +3223,27 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
               {/* Back Arrow Button for Active Panels (seta no canto superior esquerdo para voltar) */}
               {activeTab !== 'HOME' && (
                 <div className="mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-5">
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('HOME')}
-                    className="px-3.5 py-2 text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-xl transition-all flex items-center gap-2 shadow-3xs cursor-pointer group shrink-0"
-                  >
-                    <ArrowLeft className="w-4 h-4 text-indigo-650 group-hover:-translate-x-0.5 transition-transform" />
-                    <span>Voltar ao Painel Principal</span>
-                  </button>
+                  {loggedInStaff && ['COORDENADOR_TURNO', 'COORDENADOR_DISCIPLINA', 'COORDENADOR'].includes(loggedInStaff.role) ? (
+                    activeTab !== 'FINANCEIRO' ? (
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab('FINANCEIRO')}
+                        className="px-3.5 py-2 text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-xl transition-all flex items-center gap-2 shadow-3xs cursor-pointer group shrink-0"
+                      >
+                        <ArrowLeft className="w-4 h-4 text-indigo-650 group-hover:-translate-x-0.5 transition-transform" />
+                        <span>Voltar às Finanças</span>
+                      </button>
+                    ) : <div />
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('HOME')}
+                      className="px-3.5 py-2 text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-xl transition-all flex items-center gap-2 shadow-3xs cursor-pointer group shrink-0"
+                    >
+                      <ArrowLeft className="w-4 h-4 text-indigo-650 group-hover:-translate-x-0.5 transition-transform" />
+                      <span>Voltar ao Painel Principal</span>
+                    </button>
+                  )}
                   
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-heading font-black uppercase text-slate-700 tracking-wider">
@@ -3426,6 +3597,7 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
                     }}
                     userRole={userRole}
                     canEdit={canUserEditModule('RH')}
+                    loggedInStaff={loggedInStaff}
                   />
                 )}
 
@@ -3512,6 +3684,8 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
                     schoolSettings={schoolSettings}
                     onCloseAcademicYear={handleCloseAcademicYear}
                     onUpdateSchoolSettings={handleUpdateSchoolSettings}
+                    financeRecords={propinasRecords}
+                    onNavigateToFinance={() => setActiveTab('FINANCEIRO')}
                   />
                 )}
 
@@ -3544,16 +3718,27 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
                 )}
 
                 {activeTab === 'HOME' && (
-                  <StatsDashboard
-                    students={hermeticStudents}
-                    grades={hermeticGrades}
-                    settings={schoolSettings}
-                    userRole={loggedInStaff ? loggedInStaff.role : ''}
-                    activeModality={activeModality}
-                    currentClass={currentClass}
-                    currentSection={currentSection}
-                    isHome={true}
-                  />
+                  <>
+                    {loggedInStaff && (
+                      <PainelAlertasChefia
+                        loggedInStaff={loggedInStaff}
+                        staffList={staffList}
+                        financeRecords={propinasRecords}
+                        schoolSettings={schoolSettings}
+                        onNavigateToFinance={() => setActiveTab('FINANCEIRO')}
+                      />
+                    )}
+                    <StatsDashboard
+                      students={hermeticStudents}
+                      grades={hermeticGrades}
+                      settings={schoolSettings}
+                      userRole={loggedInStaff ? loggedInStaff.role : ''}
+                      activeModality={activeModality}
+                      currentClass={currentClass}
+                      currentSection={currentSection}
+                      isHome={true}
+                    />
+                  </>
                 )}
 
                 {loggedInStaff && activeTab === 'COMUNICACAO' && (

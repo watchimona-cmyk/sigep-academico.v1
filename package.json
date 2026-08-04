@@ -4,7 +4,7 @@
   "version": "1.1.0",
   "description": "Sistema Integrado de Gestão Escolar Profissional",
   "author": "SIGEP-Group",
-  "main": "main.js",
+  "main": "main.cjs",
   "type": "module",
   "repository": {
     "type": "git",
@@ -16,7 +16,7 @@
   "homepage": "https://github.com/watchimona-cmyk/sigep-academico#readme",
   "scripts": {
     "dev": "tsx server/index.ts",
-    "build": "node --max-old-space-size=4096 ./node_modules/vite/bin/vite.js build && esbuild server/index.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+    "build": "node --max-old-space-size=2048 node_modules/vite/bin/vite.js build && esbuild server/index.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "start": "node dist/server.cjs",
     "preview": "vite preview",
     "clean": "rm -rf dist dist-electron server.js",
@@ -67,7 +67,7 @@
   },
   "build": {
     "appId": "com.sigep.academico",
-    "productName": "SIGEP-Acadêmico",
+    "productName": "SIGEP-Academico",
     "copyright": "Copyright © 2026 SIGEP-Group. Todos os direitos reservados.",
     "directories": {
       "output": "dist-electron"
@@ -90,17 +90,14 @@
     "win": {
       "target": [
         "nsis"
-      ],
-      "icon": "assets/icon.ico",
-      "publisherName": "SIGEP-Group"
+      ]
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "SIGEP-Acadêmico",
-      "publisher": "SIGEP-Group"
+      "shortcutName": "SIGEP-Academico"
     }
   }
 }

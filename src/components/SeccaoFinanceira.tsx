@@ -4,7 +4,15 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Student, StudentFinance, UserRole, Staff } from '../types';
+import { Student, StudentFinance, UserRole, Staff, SchoolSettings } from '../types';
+import CalendarioFaltasModal from './CalendarioFaltasModal';
+import PainelAlertasChefia from './PainelAlertasChefia';
+import {
+  generateFinancialQuarterlyPDF,
+  generateAttendanceQuarterlyPDF,
+  getTrimesterName,
+  getTrimesterForMonthIndex
+} from '../utils/reportPdfGenerator';
 import { 
   DollarSign, 
   Search, 
@@ -41,8 +49,8 @@ interface SeccaoFinanceiraProps {
   loggedInStaff?: Staff | null;
   diasRestantes: number;
   staffList: Staff[];
-  initialTab?: 'REGISTO' | 'BI' | 'FALTAS' | 'HUB';
-  onTabChange?: (tab: 'REGISTO' | 'BI' | 'FALTAS' | 'HUB') => void;
+  initialTab?: 'REGISTO' | 'BI' | 'FALTAS' | 'TRIMESTRAL' | 'HUB';
+  onTabChange?: (tab: 'REGISTO' | 'BI' | 'FALTAS' | 'TRIMESTRAL' | 'HUB') => void;
   canEdit?: boolean;
 }
 
@@ -272,14 +280,48 @@ export default function SeccaoFinanceira({
   const [authPassword, setAuthPassword] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
 
-  // Sub-tab selection state (REGISTO, BI, FALTAS or HUB)
-  const [financeActiveSubTab, setFinanceActiveSubTab] = useState<'REGISTO' | 'BI' | 'FALTAS' | 'HUB'>(initialTab);
+  // Sub-tab selection state (REGISTO, BI, FALTAS, TRIMESTRAL or HUB)
+  const [financeActiveSubTab, setFinanceActiveSubTab] = useState<'REGISTO' | 'BI' | 'FALTAS' | 'TRIMESTRAL' | 'HUB'>(initialTab);
+  const [selectedTrimester, setSelectedTrimester] = useState<number | 'TODOS'>(1);
+  const [calendarStudentModal, setCalendarStudentModal] = useState<StudentFinance | null>(null);
+
+  const schoolSettings: SchoolSettings | undefined = React.useMemo(() => {
+    const saved = localStorage.getItem('sigep_school_settings_v1');
+    if (saved) {
+      try { return JSON.parse(saved); } catch (e) { return undefined; }
+    }
+    return undefined;
+  }, []);
+
+  const subdirectorAdminName = React.useMemo(() => {
+    const sda = staffList.find(s => s.role === 'SUB_DIRECTOR_ADMINISTRATIVO');
+    if (sda) return sda.name;
+    if (schoolSettings?.subdirectorAdminName) return schoolSettings.subdirectorAdminName;
+    if (schoolSettings?.subdirectorName) return schoolSettings.subdirectorName;
+    return 'Subdirector Administrativo';
+  }, [staffList, schoolSettings]);
+
+  // Checagem de Perfil de Coordenação com Acesso Restrito Exclusivo para Lançamento de Faltas
+  const isAbsenceOnlyCoordinator = React.useMemo(() => {
+    if (!loggedInStaff) return false;
+    if (loggedInStaff.sigepAbsenceAccessOnly) return true;
+    if (['COORDENADOR_TURNO', 'COORDENADOR_DISCIPLINA', 'COORDENADOR'].includes(loggedInStaff.role)) {
+      return loggedInStaff.sigepAccessAllowed !== false;
+    }
+    return false;
+  }, [loggedInStaff]);
 
   useEffect(() => {
-    if (initialTab) {
+    if (isAbsenceOnlyCoordinator && financeActiveSubTab !== 'FALTAS') {
+      setFinanceActiveSubTab('FALTAS');
+    }
+  }, [isAbsenceOnlyCoordinator, financeActiveSubTab]);
+
+  useEffect(() => {
+    if (initialTab && !isAbsenceOnlyCoordinator) {
       setFinanceActiveSubTab(initialTab);
     }
-  }, [initialTab]);
+  }, [initialTab, isAbsenceOnlyCoordinator]);
 
   // Absences state
   const [selectedFaltaStudent, setSelectedFaltaStudent] = useState<StudentFinance | null>(null);
@@ -747,6 +789,14 @@ export default function SeccaoFinanceira({
 
   return (
     <div id="finance-section" className="space-y-6">
+      {loggedInStaff && (
+        <PainelAlertasChefia
+          loggedInStaff={loggedInStaff}
+          staffList={staffList}
+          financeRecords={financeRecords}
+        />
+      )}
+
       {!canEdit && (
         <div className="bg-amber-50 border-l-4 border-amber-500 p-4 rounded-xl flex items-center gap-3 shadow-xs">
           <Lock className="w-5 h-5 text-amber-600 shrink-0" />
@@ -765,108 +815,127 @@ export default function SeccaoFinanceira({
         </div>
       )}
 
-      {/* KPI REPORT CARD */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        
-        <div className="bg-gradient-to-br from-indigo-900 to-slate-900 text-white p-5 rounded-2xl shadow-xs border border-indigo-950 flex items-center justify-between">
+      {/* KPI REPORT CARD / BANNER PARA COORDENAÇÃO */}
+      {isAbsenceOnlyCoordinator ? (
+        <div className="bg-gradient-to-r from-cyan-950 via-slate-900 to-teal-950 text-white p-5 rounded-2xl shadow-md border border-cyan-500/30 flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="space-y-1">
-            <span className="text-[10px] uppercase font-bold text-indigo-300 font-mono tracking-widest">Total Arrecadado (Caixa)</span>
-            <div className="text-2xl font-heading font-extrabold text-white">
-              {totalArrecadado.toLocaleString('pt-PT', { minimumFractionDigits: 2 })} Kz
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] uppercase font-black text-cyan-400 font-mono tracking-widest bg-cyan-950/90 border border-cyan-500/40 px-2.5 py-0.5 rounded-md">
+                SIGEP • Perfil de Coordenação Autorizado
+              </span>
             </div>
-            <span className="text-[9px] text-indigo-250 block">Soma de todas as propinas liquidadas</span>
+            <h3 className="text-base font-black text-white">Lançamento de Faltas & Controlo de Assiduidade</h3>
+            <p className="text-xs text-slate-300 font-medium max-w-2xl leading-relaxed">
+              O Director Geral atribuiu-lhe autorização para <strong>lançar única e exclusivamente faltas</strong> dos alunos no SIGEP.
+              Os módulos de propinas estão ocultados e as acções de justificação ou cobrança de faltas encontram-se desativadas.
+            </p>
           </div>
-          <div className="p-3 bg-indigo-850/60 rounded-xl text-indigo-300 shrink-0">
-            <CreditCard className="w-6 h-6" />
-          </div>
-        </div>
-
-        <div className="bg-white p-5 rounded-2xl shadow-xs border border-slate-200 flex items-center justify-between">
-          <div className="space-y-1">
-            <span className="text-[10px] uppercase font-bold text-rose-500 font-mono tracking-widest">Total de Dívidas Ativas</span>
-            <div className="text-2xl font-heading font-extrabold text-rose-600">
-              {totalEmDivida.toLocaleString('pt-PT', { minimumFractionDigits: 2 })} Kz
-            </div>
-            <span className="text-[9px] text-slate-400 block">Propinas em atraso + multas de 10% acumuladas</span>
-          </div>
-          <div className="p-3 bg-rose-50 rounded-xl text-rose-500 shrink-0">
-            <AlertCircle className="w-6 h-6" />
+          <div className="p-3 bg-cyan-500/10 rounded-xl border border-cyan-500/30 text-cyan-300 shrink-0 flex items-center gap-2 text-xs font-bold font-mono">
+            <CheckCircle className="w-5 h-5 text-cyan-400" />
+            <span>Credencial: Apenas Lançamento</span>
           </div>
         </div>
-
-        <div className="bg-white p-5 rounded-2xl shadow-xs border border-slate-200 flex flex-col justify-between">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-[10px] uppercase font-bold text-slate-500 font-mono tracking-widest block">Parâmetros de Propina & Faltas (Angola)</span>
-            <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full ${isConfigUnlocked ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
-              {isConfigUnlocked ? '🔓 Desbloqueado' : '🔒 Bloqueado'}
-            </span>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="bg-gradient-to-br from-indigo-900 to-slate-900 text-white p-5 rounded-2xl shadow-xs border border-indigo-950 flex items-center justify-between">
+            <div className="space-y-1">
+              <span className="text-[10px] uppercase font-bold text-indigo-300 font-mono tracking-widest">Total Arrecadado (Caixa)</span>
+              <div className="text-2xl font-heading font-extrabold text-white">
+                {totalArrecadado.toLocaleString('pt-PT', { minimumFractionDigits: 2 })} Kz
+              </div>
+              <span className="text-[9px] text-indigo-250 block">Soma de todas as propinas liquidadas</span>
+            </div>
+            <div className="p-3 bg-indigo-850/60 rounded-xl text-indigo-300 shrink-0">
+              <CreditCard className="w-6 h-6" />
+            </div>
           </div>
-          <form onSubmit={isConfigUnlocked ? handleSaveAndLock : handleUpdateConfig} className="grid grid-cols-3 gap-3">
-            <div>
-              <label className="block text-[8px] font-bold text-slate-450 uppercase mb-0.5">Mensalidade (Kz)</label>
-              <input 
-                type="number" 
-                value={vMensal}
-                onChange={(e) => setVMensal(Math.max(0, parseInt(e.target.value) || 0))}
-                disabled={!isConfigUnlocked}
-                className={`w-full border rounded px-2 py-1 text-xs font-bold transition-all ${
-                  isConfigUnlocked 
-                    ? 'bg-white border-indigo-500 text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500' 
-                    : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed select-none'
-                }`}
-              />
-            </div>
-            <div>
-              <label className="block text-[8px] font-bold text-slate-450 uppercase mb-0.5">Multa Atraso (Kz)</label>
-              <input 
-                type="number" 
-                value={vMulta}
-                onChange={(e) => setVMulta(Math.max(0, parseInt(e.target.value) || 0))}
-                disabled={!isConfigUnlocked}
-                className={`w-full border rounded px-2 py-1 text-xs font-bold transition-all ${
-                  isConfigUnlocked 
-                    ? 'bg-white border-indigo-500 text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500' 
-                    : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed select-none'
-                }`}
-              />
-            </div>
-            <div>
-              <label className="block text-[8px] font-bold text-slate-450 uppercase mb-0.5">Taxa Falta (Kz)</label>
-              <input 
-                type="number" 
-                value={vFalta}
-                onChange={(e) => setVFalta(Math.max(0, parseInt(e.target.value) || 0))}
-                disabled={!isConfigUnlocked}
-                className={`w-full border rounded px-2 py-1 text-xs font-bold transition-all ${
-                  isConfigUnlocked 
-                    ? 'bg-white border-indigo-500 text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500' 
-                    : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed select-none'
-                }`}
-              />
-            </div>
-            {isConfigUnlocked ? (
-              <button 
-                type="submit"
-                className="col-span-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-1.5 px-2 rounded-xl text-[9.5px] uppercase tracking-wide cursor-pointer text-center transition-colors flex items-center justify-center gap-1 shadow-sm"
-              >
-                <span>💾 Salvar & Bloquear Parâmetros</span>
-              </button>
-            ) : (
-              <button 
-                type="submit"
-                className="col-span-3 bg-slate-900 hover:bg-slate-850 text-white font-bold py-1.5 px-2 rounded-xl text-[9.5px] uppercase tracking-wide cursor-pointer text-center transition-colors flex items-center justify-center gap-1 shadow-sm"
-              >
-                <span>🔑 Desbloquear com Credenciais do SDA</span>
-              </button>
-            )}
-          </form>
-        </div>
 
-      </div>
+          <div className="bg-white p-5 rounded-2xl shadow-xs border border-slate-200 flex items-center justify-between">
+            <div className="space-y-1">
+              <span className="text-[10px] uppercase font-bold text-rose-500 font-mono tracking-widest">Total de Dívidas Ativas</span>
+              <div className="text-2xl font-heading font-extrabold text-rose-600">
+                {totalEmDivida.toLocaleString('pt-PT', { minimumFractionDigits: 2 })} Kz
+              </div>
+              <span className="text-[9px] text-slate-400 block">Propinas em atraso + multas de 10% acumuladas</span>
+            </div>
+            <div className="p-3 bg-rose-50 rounded-xl text-rose-500 shrink-0">
+              <AlertCircle className="w-6 h-6" />
+            </div>
+          </div>
+
+          <div className="bg-white p-5 rounded-2xl shadow-xs border border-slate-200 flex flex-col justify-between">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[10px] uppercase font-bold text-slate-500 font-mono tracking-widest block">Parâmetros de Propina & Faltas (Angola)</span>
+              <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full ${isConfigUnlocked ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
+                {isConfigUnlocked ? '🔓 Desbloqueado' : '🔒 Bloqueado'}
+              </span>
+            </div>
+            <form onSubmit={isConfigUnlocked ? handleSaveAndLock : handleUpdateConfig} className="grid grid-cols-3 gap-3">
+              <div>
+                <label className="block text-[8px] font-bold text-slate-450 uppercase mb-0.5">Mensalidade (Kz)</label>
+                <input 
+                  type="number" 
+                  value={vMensal}
+                  onChange={(e) => setVMensal(Math.max(0, parseInt(e.target.value) || 0))}
+                  disabled={!isConfigUnlocked}
+                  className={`w-full border rounded px-2 py-1 text-xs font-bold transition-all ${
+                    isConfigUnlocked 
+                      ? 'bg-white border-indigo-500 text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500' 
+                      : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed select-none'
+                  }`}
+                />
+              </div>
+              <div>
+                <label className="block text-[8px] font-bold text-slate-450 uppercase mb-0.5">Multa Atraso (Kz)</label>
+                <input 
+                  type="number" 
+                  value={vMulta}
+                  onChange={(e) => setVMulta(Math.max(0, parseInt(e.target.value) || 0))}
+                  disabled={!isConfigUnlocked}
+                  className={`w-full border rounded px-2 py-1 text-xs font-bold transition-all ${
+                    isConfigUnlocked 
+                      ? 'bg-white border-indigo-500 text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500' 
+                      : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed select-none'
+                  }`}
+                />
+              </div>
+              <div>
+                <label className="block text-[8px] font-bold text-slate-450 uppercase mb-0.5">Taxa Falta (Kz)</label>
+                <input 
+                  type="number" 
+                  value={vFalta}
+                  onChange={(e) => setVFalta(Math.max(0, parseInt(e.target.value) || 0))}
+                  disabled={!isConfigUnlocked}
+                  className={`w-full border rounded px-2 py-1 text-xs font-bold transition-all ${
+                    isConfigUnlocked 
+                      ? 'bg-white border-indigo-500 text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500' 
+                      : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed select-none'
+                  }`}
+                />
+              </div>
+              {isConfigUnlocked ? (
+                <button 
+                  type="submit"
+                  className="col-span-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-1.5 px-2 rounded-xl text-[9.5px] uppercase tracking-wide cursor-pointer text-center transition-colors flex items-center justify-center gap-1 shadow-sm"
+                >
+                  <span>💾 Salvar & Bloquear Parâmetros</span>
+                </button>
+              ) : (
+                <button 
+                  type="submit"
+                  className="col-span-3 bg-slate-900 hover:bg-slate-850 text-white font-bold py-1.5 px-2 rounded-xl text-[9.5px] uppercase tracking-wide cursor-pointer text-center transition-colors flex items-center justify-center gap-1 shadow-sm"
+                >
+                  <span>🔑 Desbloquear com Credenciais do SDA</span>
+                </button>
+              )}
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* HUB or SUB-TABS NAVIGATION */}
       {financeActiveSubTab === 'HUB' ? (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 animate-fadeIn">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 animate-fadeIn">
           {/* Card 1: REGISTO */}
           <div 
             onClick={() => {
@@ -941,7 +1010,7 @@ export default function SeccaoFinanceira({
                   CONTROLO DE FALTAS & MULTAS
                 </h4>
                 <p className="text-[11px] text-slate-500 font-medium leading-relaxed">
-                  Lançamento de faltas, controlo de atrasos, justificação de ocorrências e liquidação de multas administrativas.
+                  Lançamento de faltas, controlo de atrasos, justificação no calendário e liquidação de multas administrativas.
                 </p>
               </div>
             </div>
@@ -950,59 +1019,108 @@ export default function SeccaoFinanceira({
               <ChevronRight className="w-4 h-4 transform group-hover:translate-x-1 transition-transform" />
             </div>
           </div>
+
+          {/* Card 4: RELATÓRIOS TRIMESTRAIS & SDA */}
+          <div 
+            onClick={() => {
+              setFinanceActiveSubTab('TRIMESTRAL');
+              if (onTabChange) onTabChange('TRIMESTRAL');
+            }}
+            className="group relative bg-white p-6 rounded-2xl border border-slate-200/80 hover:border-indigo-300 shadow-3xs hover:shadow-md transition-all duration-350 cursor-pointer flex flex-col justify-between space-y-5 transform hover:-translate-y-1"
+          >
+            <div className="space-y-4">
+              <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center border border-indigo-100 group-hover:bg-indigo-600 group-hover:text-white group-hover:border-indigo-500 transition-all duration-350">
+                <Printer className="w-6 h-6" />
+              </div>
+              <div className="space-y-1.5">
+                <span className="text-[9px] font-black uppercase text-indigo-600 tracking-widest bg-indigo-50 px-2 py-0.5 rounded-md">Direcção & SDA</span>
+                <h4 className="text-sm font-black text-slate-900 uppercase tracking-wide group-hover:text-indigo-700 transition-colors mt-1">
+                  RELATÓRIOS TRIMESTRAIS (SDA)
+                </h4>
+                <p className="text-[11px] text-slate-500 font-medium leading-relaxed">
+                  Balanço trimestral de propinas, faltas, ranking de classes adimplentes e emissão de PDFs oficiais com assinatura do Subdirector Administrativo.
+                </p>
+              </div>
+            </div>
+            <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-[10px] font-bold text-slate-450 group-hover:text-indigo-600">
+              <span className="uppercase tracking-wider">Aceder ao Módulo</span>
+              <ChevronRight className="w-4 h-4 transform group-hover:translate-x-1 transition-transform" />
+            </div>
+          </div>
         </div>
       ) : (
         <>
           {/* Botão de Voltar e Breadcrumb */}
-          <div className="flex items-center justify-between bg-white px-5 py-3 rounded-2xl border border-slate-200/80 shadow-3xs mb-4 animate-fadeIn">
-            <button
-              onClick={() => {
-                setFinanceActiveSubTab('HUB');
-                if (onTabChange) onTabChange('HUB');
-              }}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-600 hover:text-indigo-650 transition-all cursor-pointer text-[10.5px] font-black uppercase tracking-wider"
-            >
-              <ArrowLeft className="w-3.5 h-3.5" />
-              <span>Voltar ao Hub Financeiro</span>
-            </button>
-            <div className="text-[10px] font-bold text-slate-450 font-mono uppercase tracking-widest hidden sm:block">
-              Finanças &gt; <span className="text-indigo-600 font-black">{
-                financeActiveSubTab === 'REGISTO' ? 'Propinas & Pagamentos' :
-                financeActiveSubTab === 'BI' ? 'Boletim de Informação' : 'Controlo de Faltas'
-              }</span>
+          {!isAbsenceOnlyCoordinator && (
+            <div className="flex items-center justify-between bg-white px-5 py-3 rounded-2xl border border-slate-200/80 shadow-3xs mb-4 animate-fadeIn">
+              <button
+                onClick={() => {
+                  setFinanceActiveSubTab('HUB');
+                  if (onTabChange) onTabChange('HUB');
+                }}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-600 hover:text-indigo-650 transition-all cursor-pointer text-[10.5px] font-black uppercase tracking-wider"
+              >
+                <ArrowLeft className="w-3.5 h-3.5" />
+                <span>Voltar ao Hub Financeiro</span>
+              </button>
+              <div className="text-[10px] font-bold text-slate-450 font-mono uppercase tracking-widest hidden sm:block">
+                Finanças &gt; <span className="text-indigo-600 font-black">{
+                  financeActiveSubTab === 'REGISTO' ? 'Propinas & Pagamentos' :
+                  financeActiveSubTab === 'BI' ? 'Boletim de Informação' :
+                  financeActiveSubTab === 'TRIMESTRAL' ? 'Relatórios Trimestrais (SDA)' : 'Controlo de Faltas'
+                }</span>
+              </div>
             </div>
-          </div>
+          )}
 
           {/* SUB-TABS NAVIGATION */}
-          <div className="flex border-b border-slate-200 gap-1 shrink-0">
-            <button
-              type="button"
-              onClick={() => {
-                setFinanceActiveSubTab('REGISTO');
-                if (onTabChange) onTabChange('REGISTO');
-              }}
-              className={`px-4 py-2.5 text-[11px] font-bold uppercase tracking-wider border-b-2 transition-all cursor-pointer ${
-                financeActiveSubTab === 'REGISTO'
-                  ? 'border-indigo-600 text-indigo-600 font-extrabold'
-                  : 'border-transparent text-slate-500 hover:text-slate-800'
-              }`}
-            >
-              Registo de Propinas & Pagamentos
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setFinanceActiveSubTab('BI');
-                if (onTabChange) onTabChange('BI');
-              }}
-              className={`px-4 py-2.5 text-[11px] font-bold uppercase tracking-wider border-b-2 transition-all cursor-pointer ${
-                financeActiveSubTab === 'BI'
-                  ? 'border-indigo-600 text-indigo-600 font-extrabold'
-                  : 'border-transparent text-slate-500 hover:text-slate-800'
-              }`}
-            >
-              Relatório Financeiro (BI por Classe)
-            </button>
+          <div className="flex border-b border-slate-200 gap-1 shrink-0 overflow-x-auto">
+            {!isAbsenceOnlyCoordinator && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFinanceActiveSubTab('REGISTO');
+                    if (onTabChange) onTabChange('REGISTO');
+                  }}
+                  className={`px-4 py-2.5 text-[11px] font-bold uppercase tracking-wider border-b-2 transition-all cursor-pointer ${
+                    financeActiveSubTab === 'REGISTO'
+                      ? 'border-indigo-600 text-indigo-600 font-extrabold'
+                      : 'border-transparent text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  Registo de Propinas & Pagamentos
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFinanceActiveSubTab('BI');
+                    if (onTabChange) onTabChange('BI');
+                  }}
+                  className={`px-4 py-2.5 text-[11px] font-bold uppercase tracking-wider border-b-2 transition-all cursor-pointer ${
+                    financeActiveSubTab === 'BI'
+                      ? 'border-indigo-600 text-indigo-600 font-extrabold'
+                      : 'border-transparent text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  Relatório Financeiro (BI por Classe)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFinanceActiveSubTab('TRIMESTRAL');
+                    if (onTabChange) onTabChange('TRIMESTRAL');
+                  }}
+                  className={`px-4 py-2.5 text-[11px] font-bold uppercase tracking-wider border-b-2 transition-all cursor-pointer ${
+                    financeActiveSubTab === 'TRIMESTRAL'
+                      ? 'border-indigo-600 text-indigo-600 font-extrabold'
+                      : 'border-transparent text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  Relatórios Trimestrais Oficiais (Propinas & Faltas)
+                </button>
+              </>
+            )}
             <button
               type="button"
               onClick={() => {
@@ -1015,7 +1133,7 @@ export default function SeccaoFinanceira({
                   : 'border-transparent text-slate-500 hover:text-slate-800'
               }`}
             >
-              Gestão de Faltas (Justificar / Pagar)
+              {isAbsenceOnlyCoordinator ? 'Lançamento & Gestão de Faltas' : 'Gestão de Faltas (Calendário / Justificar)'}
             </button>
           </div>
         </>
@@ -1499,30 +1617,61 @@ export default function SeccaoFinanceira({
                         <td className="py-3 px-4 text-center">
                           <div className="flex items-center justify-center gap-1.5">
                             <button
+                              onClick={() => setCalendarStudentModal(rec)}
+                              className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-extrabold px-2 py-1 rounded text-[9.5px] uppercase tracking-wide transition-all border border-indigo-150 cursor-pointer flex items-center gap-0.5 shadow-3xs"
+                              title="Abrir Calendário Mensal do Aluno"
+                            >
+                              <Calendar className="w-3.5 h-3.5" />
+                              <span>Calendário</span>
+                            </button>
+                            <button
                               onClick={() => handleFaltaAction(rec.id, 'LANÇAR')}
                               className="bg-rose-50 hover:bg-rose-100 text-rose-700 font-extrabold px-2 py-1 rounded text-[9.5px] uppercase tracking-wide transition-all border border-rose-150 cursor-pointer flex items-center gap-0.5 shadow-3xs"
                             >
                               <PlusCircle className="w-3.5 h-3.5" />
                               <span>Lançar</span>
                             </button>
-                            <button
-                              onClick={() => handleFaltaAction(rec.id, 'JUSTIFICAR')}
-                              className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-extrabold px-2 py-1 rounded text-[9.5px] uppercase tracking-wide transition-all border border-emerald-150 cursor-pointer flex items-center gap-0.5 shadow-3xs"
-                              disabled={injust === 0}
-                              style={{ opacity: injust === 0 ? 0.45 : 1, cursor: injust === 0 ? 'not-allowed' : 'pointer' }}
-                            >
-                              <CheckCircle className="w-3.5 h-3.5" />
-                              <span>Justificar</span>
-                            </button>
-                            <button
-                              onClick={() => handleFaltaAction(rec.id, 'PAGAR')}
-                              className="bg-amber-50 hover:bg-amber-100 text-amber-700 font-extrabold px-2 py-1 rounded text-[9.5px] uppercase tracking-wide transition-all border border-amber-150 cursor-pointer flex items-center gap-0.5 shadow-3xs"
-                              disabled={injust === 0}
-                              style={{ opacity: injust === 0 ? 0.45 : 1, cursor: injust === 0 ? 'not-allowed' : 'pointer' }}
-                            >
-                              <DollarSign className="w-3.5 h-3.5" />
-                              <span>Pagar</span>
-                            </button>
+                            {isAbsenceOnlyCoordinator ? (
+                              <>
+                                <button
+                                  disabled
+                                  className="bg-slate-100 text-slate-400 font-bold px-2 py-1 rounded text-[9.5px] uppercase tracking-wide border border-slate-200 cursor-not-allowed opacity-60 flex items-center gap-0.5"
+                                  title="Apenas o Director Geral ou Subdirector pode justificar faltas"
+                                >
+                                  <Lock className="w-3.5 h-3.5 text-slate-400" />
+                                  <span>Justificar</span>
+                                </button>
+                                <button
+                                  disabled
+                                  className="bg-slate-100 text-slate-400 font-bold px-2 py-1 rounded text-[9.5px] uppercase tracking-wide border border-slate-200 cursor-not-allowed opacity-60 flex items-center gap-0.5"
+                                  title="Sem permissão para cobrar faltas. Função restrita ao Departamento Financeiro"
+                                >
+                                  <Lock className="w-3.5 h-3.5 text-slate-400" />
+                                  <span>Cobrar</span>
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <button
+                                  onClick={() => handleFaltaAction(rec.id, 'JUSTIFICAR')}
+                                  className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-extrabold px-2 py-1 rounded text-[9.5px] uppercase tracking-wide transition-all border border-emerald-150 cursor-pointer flex items-center gap-0.5 shadow-3xs"
+                                  disabled={injust === 0}
+                                  style={{ opacity: injust === 0 ? 0.45 : 1, cursor: injust === 0 ? 'not-allowed' : 'pointer' }}
+                                >
+                                  <CheckCircle className="w-3.5 h-3.5" />
+                                  <span>Justificar</span>
+                                </button>
+                                <button
+                                  onClick={() => handleFaltaAction(rec.id, 'PAGAR')}
+                                  className="bg-amber-50 hover:bg-amber-100 text-amber-700 font-extrabold px-2 py-1 rounded text-[9.5px] uppercase tracking-wide transition-all border border-amber-150 cursor-pointer flex items-center gap-0.5 shadow-3xs"
+                                  disabled={injust === 0}
+                                  style={{ opacity: injust === 0 ? 0.45 : 1, cursor: injust === 0 ? 'not-allowed' : 'pointer' }}
+                                >
+                                  <DollarSign className="w-3.5 h-3.5" />
+                                  <span>Pagar</span>
+                                </button>
+                              </>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -1530,6 +1679,248 @@ export default function SeccaoFinanceira({
                   })}
                 </tbody>
               </table>
+            </div>
+          </div>
+
+        </div>
+      )}
+
+      {/* SEÇÃO DE RELATÓRIOS TRIMESTRAIS OFICIAIS (SUBDIRECTOR ADMINISTRATIVO) */}
+      {financeActiveSubTab === 'TRIMESTRAL' && (
+        <div className="space-y-6 animate-fadeIn">
+          {/* Header & Trimester Selector */}
+          <div className="bg-white border border-slate-200 rounded-2xl p-5 flex flex-col md:flex-row items-center justify-between gap-4 shadow-2xs">
+            <div className="space-y-1">
+              <span className="text-[10px] uppercase font-black tracking-widest text-indigo-600 bg-indigo-50 px-2.5 py-1 rounded-md">
+                Perfil do Subdirector Administrativo
+              </span>
+              <h3 className="text-base font-extrabold text-slate-900 uppercase tracking-tight">
+                Consolidado Trimestral Financeiro e de Assiduidade
+              </h3>
+              <p className="text-xs text-slate-500 font-medium">
+                Gere e exporte relatórios oficiais com tabelas discriminadas e assinatura institucional do Subdirector Administrativo (<strong>{subdirectorAdminName}</strong>).
+              </p>
+            </div>
+
+            {/* Trimester Buttons */}
+            <div className="flex items-center gap-1.5 bg-slate-100 p-1.5 rounded-xl border border-slate-200">
+              {[
+                { id: 1, label: 'Iº Trimestre' },
+                { id: 2, label: 'IIº Trimestre' },
+                { id: 3, label: 'IIIº Trimestre' },
+                { id: 'TODOS', label: 'Ano Global' }
+              ].map(t => (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => setSelectedTrimester(t.id as any)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${
+                    selectedTrimester === t.id
+                      ? 'bg-indigo-600 text-white shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+                  }`}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* SECTION A: FINANCIAL PROPINAS REPORT */}
+          <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-6 shadow-2xs">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+              <div>
+                <h4 className="text-sm font-black text-slate-900 uppercase tracking-wide flex items-center gap-2">
+                  <DollarSign className="w-5 h-5 text-indigo-600" />
+                  <span>1. Rendimento Financeiro das Propinas ({typeof selectedTrimester === 'number' ? getTrimesterName(selectedTrimester) : 'Visão Global Anual'})</span>
+                </h4>
+                <p className="text-xs text-slate-500 font-medium mt-0.5">
+                  Análise comparativa de liquidação, dívida ativa por classe e turmas sem pendências.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => generateFinancialQuarterlyPDF(financeRecords, selectedTrimester, vMensal, vMulta, schoolSettings, subdirectorAdminName)}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold px-4 py-2.5 rounded-xl text-xs uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer shadow-md shadow-indigo-600/10 shrink-0"
+              >
+                <Printer className="w-4 h-4" />
+                <span>Descarregar PDF Oficial de Propinas</span>
+              </button>
+            </div>
+
+            {/* Ranking of Classes Table */}
+            <div className="space-y-3">
+              <h5 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider">
+                Ranking das Classes com Maior Arrecadação de Propinas
+              </h5>
+              <div className="overflow-x-auto rounded-xl border border-slate-200">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="bg-slate-50 text-[10px] font-black uppercase text-slate-500 border-b border-slate-200">
+                      <th className="py-2.5 px-4 text-center">Posição</th>
+                      <th className="py-2.5 px-4">Classe</th>
+                      <th className="py-2.5 px-4 text-center">Total Alunos</th>
+                      <th className="py-2.5 px-4 text-right">Total Arrecadado</th>
+                      <th className="py-2.5 px-4 text-right">Dívida Pendente</th>
+                      <th className="py-2.5 px-4 text-center">Taxa de Adimplência</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 font-medium">
+                    {(() => {
+                      const classesList = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13"];
+                      const summaries = classesList.map(cls => {
+                        const clsRecords = financeRecords.filter(r => r.class && r.class.toString().replace('ª', '').trim() === cls);
+                        let arrec = 0;
+                        let div = 0;
+                        clsRecords.forEach(r => { arrec += r.totalPago; div += r.totalDivida; });
+                        const prev = arrec + div;
+                        const taxa = prev > 0 ? (arrec / prev) * 100 : 100;
+                        return { className: `${cls}ª Classe`, totalAlunos: clsRecords.length, arrec, div, taxa: Math.round(taxa * 10) / 10 };
+                      }).filter(c => c.totalAlunos > 0);
+
+                      summaries.sort((a, b) => b.arrec - a.arrec);
+
+                      if (summaries.length === 0) {
+                        return (
+                          <tr>
+                            <td colSpan={6} className="text-center py-6 text-slate-400 font-medium italic">
+                              Nenhuma turma cadastrada com alunos no sistema.
+                            </td>
+                          </tr>
+                        );
+                      }
+
+                      return summaries.map((c, idx) => (
+                        <tr key={c.className} className="hover:bg-slate-50/60">
+                          <td className="py-2.5 px-4 text-center font-extrabold font-mono text-indigo-700">
+                            #{idx + 1}º
+                          </td>
+                          <td className="py-2.5 px-4 font-bold text-slate-900">{c.className}</td>
+                          <td className="py-2.5 px-4 text-center font-mono">{c.totalAlunos}</td>
+                          <td className="py-2.5 px-4 text-right font-extrabold text-emerald-600 font-mono">
+                            {c.arrec.toLocaleString('pt-PT')} Kz
+                          </td>
+                          <td className="py-2.5 px-4 text-right font-bold text-rose-600 font-mono">
+                            {c.div.toLocaleString('pt-PT')} Kz
+                          </td>
+                          <td className="py-2.5 px-4 text-center font-black font-mono">
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] ${
+                              c.taxa >= 80 ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                            }`}>
+                              {c.taxa}%
+                            </span>
+                          </td>
+                        </tr>
+                      ));
+                    })()}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Turmas com e sem divida */}
+            <div className="space-y-3 pt-2">
+              <h5 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider">
+                Classificação de Turmas Sem Dívida (100% Adimplentes) vs Com Pendências
+              </h5>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="bg-emerald-50/50 border border-emerald-200 p-4 rounded-xl space-y-2">
+                  <div className="flex items-center gap-2 text-emerald-800 font-extrabold text-xs uppercase">
+                    <CheckCircle className="w-4 h-4 text-emerald-600" />
+                    <span>Turmas 100% Sem Dívida (Adimplentes)</span>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {(() => {
+                      const turmaMap = new Map<string, number>();
+                      financeRecords.forEach(r => {
+                        const key = `${r.class}ª Cl. - Turma ${r.section}`;
+                        turmaMap.set(key, (turmaMap.get(key) || 0) + r.totalDivida);
+                      });
+                      const cleanTurmas = Array.from(turmaMap.entries()).filter(([_, div]) => div === 0);
+                      if (cleanTurmas.length === 0) {
+                        return <span className="text-xs text-slate-400 italic">Nenhuma turma 100% livre de dívidas no momento.</span>;
+                      }
+                      return cleanTurmas.map(([tName]) => (
+                        <span key={tName} className="bg-emerald-100 text-emerald-800 text-[10px] font-black px-2.5 py-1 rounded-lg border border-emerald-300">
+                          {tName}
+                        </span>
+                      ));
+                    })()}
+                  </div>
+                </div>
+
+                <div className="bg-rose-50/50 border border-rose-200 p-4 rounded-xl space-y-2">
+                  <div className="flex items-center gap-2 text-rose-800 font-extrabold text-xs uppercase">
+                    <AlertCircle className="w-4 h-4 text-rose-600" />
+                    <span>Turmas Com Dívida Pendente</span>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {(() => {
+                      const turmaMap = new Map<string, number>();
+                      financeRecords.forEach(r => {
+                        const key = `${r.class}ª Cl. - Turma ${r.section}`;
+                        turmaMap.set(key, (turmaMap.get(key) || 0) + r.totalDivida);
+                      });
+                      const debtTurmas = Array.from(turmaMap.entries()).filter(([_, div]) => div > 0);
+                      return debtTurmas.map(([tName, div]) => (
+                        <span key={tName} className="bg-rose-100 text-rose-800 text-[10px] font-black px-2.5 py-1 rounded-lg border border-rose-300 flex items-center gap-1">
+                          <span>{tName}</span>
+                          <span className="font-mono text-rose-950 font-bold">({div.toLocaleString('pt-PT')} Kz)</span>
+                        </span>
+                      ));
+                    })()}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* SECTION B: ATTENDANCE & ABSENCES REPORT */}
+          <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-6 shadow-2xs">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+              <div>
+                <h4 className="text-sm font-black text-slate-900 uppercase tracking-wide flex items-center gap-2">
+                  <AlertCircle className="w-5 h-5 text-rose-600" />
+                  <span>2. Assiduidade & Relatório de Faltas Escolares ({typeof selectedTrimester === 'number' ? getTrimesterName(selectedTrimester) : 'Visão Global Anual'})</span>
+                </h4>
+                <p className="text-xs text-slate-500 font-medium mt-0.5">
+                  Estatísticas de faltas justificadas, não justificadas e lista de alunos sob acompanhamento pedagógico.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => generateAttendanceQuarterlyPDF(financeRecords, selectedTrimester, schoolSettings, subdirectorAdminName)}
+                className="bg-rose-600 hover:bg-rose-700 text-white font-extrabold px-4 py-2.5 rounded-xl text-xs uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer shadow-md shadow-rose-600/10 shrink-0"
+              >
+                <Printer className="w-4 h-4" />
+                <span>Descarregar PDF Oficial de Faltas</span>
+              </button>
+            </div>
+
+            {/* Metric boxes */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="bg-rose-50/60 border border-rose-200 p-4 rounded-xl text-center">
+                <span className="text-[10px] font-black uppercase text-rose-500 font-mono tracking-widest block">Total Faltas Injustificadas</span>
+                <span className="text-2xl font-black text-rose-700 font-mono">
+                  {financeRecords.reduce((sum, r) => sum + (r.faltasInjustificadas || 0), 0)}
+                </span>
+              </div>
+
+              <div className="bg-emerald-50/60 border border-emerald-200 p-4 rounded-xl text-center">
+                <span className="text-[10px] font-black uppercase text-emerald-600 font-mono tracking-widest block">Total Faltas Justificadas</span>
+                <span className="text-2xl font-black text-emerald-700 font-mono">
+                  {financeRecords.reduce((sum, r) => sum + (r.faltasJustificadas || 0), 0)}
+                </span>
+              </div>
+
+              <div className="bg-amber-50/60 border border-amber-200 p-4 rounded-xl text-center">
+                <span className="text-[10px] font-black uppercase text-amber-600 font-mono tracking-widest block">Alunos em Nível Crítico (≥10 Faltas)</span>
+                <span className="text-2xl font-black text-amber-800 font-mono">
+                  {financeRecords.filter(r => (r.faltasInjustificadas || 0) >= 10).length}
+                </span>
+              </div>
             </div>
           </div>
 
@@ -2037,6 +2428,24 @@ export default function SeccaoFinanceira({
 
           </div>
         </div>
+      )}
+
+      {/* MODAL DO CALENDÁRIO MENSAL DE FALTAS */}
+      {calendarStudentModal && (
+        <CalendarioFaltasModal
+          student={calendarStudentModal}
+          onClose={() => setCalendarStudentModal(null)}
+          canEdit={canEdit}
+          allowJustify={!isAbsenceOnlyCoordinator}
+          onSave={(updatedStudent) => {
+            const updatedList = financeRecords.map(r => r.id === updatedStudent.id ? updatedStudent : r);
+            setFinanceRecords(updatedList);
+            savePropinas(updatedList);
+            setCalendarStudentModal(null);
+            setSuccessAlert(`Assiduidade e lançamentos no calendário de ${updatedStudent.name} foram atualizados com sucesso!`);
+            setTimeout(() => setSuccessAlert(null), 3000);
+          }}
+        />
       )}
 
     </div>

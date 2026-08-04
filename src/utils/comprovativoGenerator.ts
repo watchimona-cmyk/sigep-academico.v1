@@ -171,17 +171,25 @@ export function downloadComprovativoPDF(
   drawField("Género", genderCode === 'M' ? 'Masculino (M)' : 'Feminino (F)', 140, currentY);
   currentY += 13;
 
-  // Field 2: Document & Status
-  const docType = data.docType || data.candDocType || 'B.I.';
-  const docNum = data.docNumber || data.bi || data.cedulaRegisto || '—';
-  drawField("Tipo e Nº de Documento", `${docType}: ${docNum}`, 20, currentY);
+  // Field 2: Document, Birth Date & Status
+  const rawDocType = data.docType || data.candDocType || (data.cedulaRegisto ? 'CEDULA' : 'BI');
+  let docTypeLabel = 'B.I.';
+  if (rawDocType === 'CEDULA' || rawDocType === 'CÉDULA') docTypeLabel = 'Cédula / Registo';
+  else if (rawDocType === 'PASSAPORTE') docTypeLabel = 'Passaporte';
+  else if (rawDocType === 'BI' || rawDocType === 'B.I.') docTypeLabel = 'B.I.';
+
+  const docNum = data.docNumber || data.bi || data.cedulaRegisto || data.candDocNumber || data.doc_number || '—';
+  const birthVal = data.birthDate || data.candBirthDate || data.birth_date || '—';
+
+  drawField("Tipo e Nº de Documento", `${docTypeLabel}: ${docNum}`, 20, currentY);
+  drawField("Data de Nascimento", birthVal, 95, currentY);
 
   if (type === 'CANDIDATURA') {
-    drawField("Estado da Candidatura", data.status || 'Pendente / Inscrição Registrada', 110, currentY);
+    drawField("Estado da Candidatura", data.status || 'Pendente / Inscrição Registrada', 145, currentY);
   } else if (type === 'RECONFIRMACAO') {
-    drawField("Estado de Promoção", 'Promovido (Reconfirmado)', 110, currentY);
+    drawField("Estado de Promoção", 'Promovido (Reconfirmado)', 145, currentY);
   } else {
-    drawField("Estado Escolar", 'Matriculado (Ativo)', 110, currentY);
+    drawField("Estado Escolar", 'Matriculado (Ativo)', 145, currentY);
   }
   currentY += 13;
 

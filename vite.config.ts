@@ -27,7 +27,22 @@ export default defineConfig(() => {
     build: {
       outDir: 'dist',
       emptyOutDir: true,
+      sourcemap: false,
+      minify: 'esbuild',
+      cssMinify: true,
       chunkSizeWarningLimit: 3000,
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (id.includes('node_modules')) {
+              if (id.includes('lucide-react') || id.includes('recharts') || id.includes('jspdf') || id.includes('html2canvas')) {
+                return 'vendor-libs';
+              }
+              return 'vendor';
+            }
+          }
+        }
+      }
     },
   };
 });

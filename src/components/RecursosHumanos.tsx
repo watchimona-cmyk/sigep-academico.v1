@@ -41,6 +41,7 @@ interface RecursosHumanosProps {
   onClearAllStaff?: () => void;
   userRole: string;
   canEdit?: boolean;
+  loggedInStaff?: Staff | null;
 }
 
 const ROLE_LABELS: Record<StaffRole, string> = {
@@ -105,9 +106,26 @@ export default function RecursosHumanos({
   onDeleteStaff,
   onClearAllStaff,
   userRole,
-  canEdit = true
+  canEdit = true,
+  loggedInStaff
 }: RecursosHumanosProps) {
   
+  // Regra de Privacidade: Apenas o próprio membro (ou Administrador Master SIGEP) pode visualizar a sua senha.
+  // Para outros membros dentro do RH, a senha é exibida mascarada (••••••••).
+  const renderPrivatePassword = (targetStaffId: string, rawPassword?: string) => {
+    const isSelf = loggedInStaff && (
+      loggedInStaff.id === targetStaffId || 
+      loggedInStaff.id === 'SIGEP' || 
+      loggedInStaff.is_root || 
+      userRole === 'SIGEP'
+    );
+
+    if (isSelf) {
+      return rawPassword || '12345';
+    }
+    return '••••••••';
+  };
+
   // Ocultar Administrador SIGEP de todos os utilizadores comuns absolutamente
   const staffList = rawStaffList.filter(s => {
     if (userRole !== 'SIGEP' && (s.id === 'SIGEP' || s.id === 'ADMIN_SIGEP' || s.role === 'SIGEP' || s.is_root)) {
@@ -1494,7 +1512,7 @@ export default function RecursosHumanos({
                                 <div className="space-y-1">
                                   <span className="text-[9px] font-black text-slate-400 uppercase tracking-wider block">Senha de Acesso</span>
                                   <span className="font-mono text-slate-700 bg-white px-2 py-1.5 rounded-lg border border-slate-200 block text-center font-bold">
-                                    {titular.password || '12345'}
+                                    {renderPrivatePassword(titular.id, titular.password)}
                                   </span>
                                 </div>
                                 <div className="space-y-1">
@@ -1851,7 +1869,7 @@ export default function RecursosHumanos({
 
                                 <div className="grid grid-cols-2 gap-2 text-[10px] font-bold text-slate-500 border-t border-slate-200/50 pt-2">
                                   <div>Gabinete: <span className="text-slate-800 font-bold">{t.gabinete || 'Não definido'}</span></div>
-                                  <div>Senha: <span className="text-slate-800 font-mono font-bold">{t.password || '12345'}</span></div>
+                                  <div>Senha: <span className="text-slate-800 font-mono font-bold">{renderPrivatePassword(t.id, t.password)}</span></div>
                                 </div>
                                 {t.decretoNomeacao && (
                                   <div className="text-[10px] font-bold text-slate-500 truncate">
@@ -2125,7 +2143,7 @@ export default function RecursosHumanos({
                               </span>
                             </td>
                             <td className="p-3.5 text-center font-mono font-bold text-slate-400 text-[10px]">
-                              {staff.password || '12345'}
+                              {renderPrivatePassword(staff.id, staff.password)}
                             </td>
                             <td className="p-3.5 text-[10px] text-slate-500 max-w-[200px]">
                               {isProf ? (
@@ -2279,7 +2297,7 @@ export default function RecursosHumanos({
                             <div className="space-y-1">
                               <span className="text-[9px] font-black text-slate-400 uppercase tracking-wider block">Senha de Acesso</span>
                               <span className="font-mono text-slate-700 bg-white px-2 py-1.5 rounded-lg border border-slate-200 block text-center font-bold">
-                                {titular.password || '12345'}
+                                {renderPrivatePassword(titular.id, titular.password)}
                               </span>
                             </div>
                             <div className="space-y-1">
@@ -2612,7 +2630,7 @@ export default function RecursosHumanos({
 
                             <div className="grid grid-cols-2 gap-2 text-[10px] font-bold text-slate-500 border-t border-slate-200/50 pt-2">
                               <div>Gabinete: <span className="text-slate-800 font-bold">{t.gabinete || 'Não definido'}</span></div>
-                              <div>Senha: <span className="text-slate-800 font-mono font-bold">{t.password || '12345'}</span></div>
+                              <div>Senha: <span className="text-slate-800 font-mono font-bold">{renderPrivatePassword(t.id, t.password)}</span></div>
                             </div>
                             {t.decretoNomeacao && (
                               <div className="text-[10px] font-bold text-slate-500 truncate">

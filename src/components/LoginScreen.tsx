@@ -16,7 +16,8 @@ import {
   Award,
   BookOpen,
   ArrowRight,
-  Lock
+  Lock,
+  Loader2
 } from 'lucide-react';
 
 interface LoginScreenProps {
@@ -24,18 +25,58 @@ interface LoginScreenProps {
   schoolSettings: SchoolSettings;
   onLoginSuccess: (staff: Staff) => void;
   onOpenStudentPortal?: () => void;
+  onRefreshStaff?: (updatedStaff: Staff[]) => void;
 }
 
 export default function LoginScreen({
   staffList,
   schoolSettings,
   onLoginSuccess,
-  onOpenStudentPortal
+  onOpenStudentPortal,
+  onRefreshStaff
 }: LoginScreenProps) {
   const [inputId, setInputId] = useState('');
   const [inputPassword, setInputPassword] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [showEulaConsult, setShowEulaConsult] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [currentStaff, setCurrentStaff] = useState<Staff[]>(staffList);
+
+  // Manter currentStaff em sincronia com prop staffList
+  React.useEffect(() => {
+    if (staffList && staffList.length > 0) {
+      setCurrentStaff(staffList);
+    }
+  }, [staffList]);
+
+  const [serverCheckDone, setServerCheckDone] = useState(false);
+
+  // Sincronizar funcionários do Servidor Central em segundo plano na montagem
+  React.useEffect(() => {
+    let isMounted = true;
+    const fetchCentralStaff = async () => {
+      try {
+        const res = await fetch('/api/funcionarios');
+        if (res.ok && isMounted) {
+          const serverStaff = await res.json();
+          if (Array.isArray(serverStaff) && serverStaff.length > 0) {
+            setCurrentStaff(serverStaff);
+            if (onRefreshStaff) {
+              onRefreshStaff(serverStaff);
+            }
+          }
+        }
+      } catch (err) {
+        // Servidor offline ou utilizando dados locais
+      } finally {
+        if (isMounted) {
+          setServerCheckDone(true);
+        }
+      }
+    };
+    fetchCentralStaff();
+    return () => { isMounted = false; };
+  }, []);
 
   // Estados do Modo de Manutenção (Acesso de Retaguarda)
   const [isMaintenanceModalOpen, setIsMaintenanceModalOpen] = useState(false);
@@ -44,7 +85,23 @@ export default function LoginScreen({
   const [maintenanceError, setMaintenanceError] = useState('');
   const [maintenanceSuccess, setMaintenanceSuccess] = useState('');
 
-  const hasDirectorGeral = staffList.some(s => s.role === 'DIRECTOR_GERAL');
+  // Apenas assume "First Run" se a checagem com o Servidor Central terminou
+  // e foi confirmado que não existe qualquer funcionário registado no banco de dados.
+  const hasRegisteredStaff = !serverCheckDone ? true : (
+    (currentStaff || []).some(s => s.id !== 'SIGEP' && s.id !== 'ADMIN_SIGEP' && !s.is_root) ||
+    (staffList || []).some(s => s.id !== 'SIGEP' && s.id !== 'ADMIN_SIGEP' && !s.is_root)
+  );
+
+  // Pre-sincronizar funcionários no servidor para garantir que credenciais locais estejam presentes no backend
+  React.useEffect(() => {
+    if (staffList && staffList.length > 0) {
+      fetch('/api/funcionarios/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(staffList)
+      }).catch(() => {});
+    }
+  }, [staffList]);
 
   // Capturar atalho global: Ctrl + Shift + Alt + S
   React.useEffect(() => {
@@ -124,8 +181,10 @@ export default function LoginScreen({
     setMaintenanceError('Falha na autenticação do hardware. ID ou Senha de fábrica inválidos.');
   };
 
-  const handleFormSubmit = (e: React.FormEvent) => {
+  const handleFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
+
     const cleanId = inputId.trim().toUpperCase();
     if (!cleanId) {
       setErrorMsg('Por favor, digite o seu ID de acesso.');
@@ -136,47 +195,132 @@ export default function LoginScreen({
       return;
     }
 
-    // Autenticação do Administrador SIGEP (Suporte Master / Root)
+    setIsSubmitting(true);
+    setErrorMsg('');
+
+    // 1. Autenticação rápida do Administrador SIGEP (Suporte Master / Root)
     if (cleanId === 'SIGEP' || cleanId === 'ADMIN_SIGEP' || cleanId === 'SG123') {
-      if (inputPassword === 'sigepwl') {
+      if (inputPassword === 'sigepwl' || (cleanId === 'SG123' && inputPassword === 'admin')) {
         const masterStaff: Staff = {
           id: 'SIGEP',
           name: 'Administrador SIGEP (Suporte Master)',
           role: 'SIGEP',
-          password: 'sigepwl',
+          password: inputPassword,
           is_root: true,
           is_editable: false
         };
+        setIsSubmitting(false);
         onLoginSuccess(masterStaff);
-        setErrorMsg('');
         return;
       } else {
+        setIsSubmitting(false);
         setErrorMsg('Senha incorreta para a conta Administrador SIGEP.');
         return;
       }
     }
 
-    // Se a escola ainda não foi ativada (não tem Diretor Geral), exigir obrigatoriamente login de root
-    if (!hasDirectorGeral) {
-      setErrorMsg('Primeira Execução (First Run): É obrigatório iniciar sessão com o ID do Administrador SIGEP (ID: SIGEP | Senha: sigepwl) para configurar a escola pela primeira vez.');
+    // 2. Tentar autenticação em tempo real no Servidor Central (PostgreSQL)
+    let serverAuthFailedWithWrongPassword = false;
+    let serverWrongPasswordMsg = '';
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 2500);
+      const authRes = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: cleanId, password: inputPassword }),
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+
+      if (authRes.ok) {
+        const authData = await authRes.json();
+        if (authData.success) {
+          if (authData.type === 'staff' && authData.staff) {
+            setIsSubmitting(false);
+            onLoginSuccess(authData.staff);
+            return;
+          } else if (authData.type === 'student' && onOpenStudentPortal) {
+            setIsSubmitting(false);
+            onOpenStudentPortal();
+            return;
+          }
+        }
+      } else if (authRes.status === 401) {
+        const errData = await authRes.json().catch(() => null);
+        serverAuthFailedWithWrongPassword = true;
+        serverWrongPasswordMsg = errData?.error || `Senha incorreta para o utilizador ${cleanId}.`;
+      }
+    } catch (err) {
+      // Backend offline ou indisponível, faz fallback para unificação
+    }
+
+    if (serverAuthFailedWithWrongPassword) {
+      setIsSubmitting(false);
+      setErrorMsg(serverWrongPasswordMsg);
       return;
     }
 
-    // 1. Check if the ID exists in the custom staffList FIRST
-    const matchedStaff = staffList.find(s => s.id === cleanId);
+    // 3. Unificação de Listas (Servidor Central + Local StaffList + Estado da App)
+    let fetchedServerStaff: Staff[] = [];
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 2000);
+      const res = await fetch('/api/funcionarios', { signal: controller.signal });
+      clearTimeout(timeoutId);
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          fetchedServerStaff = data;
+        }
+      }
+    } catch (err) {
+      // Ignorar erro do fetch
+    }
+
+    const combinedStaffMap = new Map<string, Staff>();
+    (staffList || []).forEach(s => s && s.id && combinedStaffMap.set(s.id.trim().toUpperCase(), s));
+    (currentStaff || []).forEach(s => s && s.id && combinedStaffMap.set(s.id.trim().toUpperCase(), s));
+    fetchedServerStaff.forEach(s => s && s.id && combinedStaffMap.set(s.id.trim().toUpperCase(), s));
+
+    const poolOfStaff = Array.from(combinedStaffMap.values());
+
+    // Validar ID na lista unificada (insensível a maiúsculas / espaços)
+    const matchedStaff = poolOfStaff.find(s => 
+      s.id.trim().toUpperCase() === cleanId || 
+      s.id.trim().toUpperCase() === cleanId.replace(/\s+/g, '')
+    );
+
     if (matchedStaff) {
       const correctSecret = matchedStaff.password || '12345';
       if (inputPassword === correctSecret) {
+        // Assegurar persistência do funcionário no servidor central
+        fetch('/api/funcionarios', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(matchedStaff)
+        }).catch(() => {});
+
+        setIsSubmitting(false);
         onLoginSuccess(matchedStaff);
-        setErrorMsg('');
         return;
       } else {
-        setErrorMsg('Senha incorreta para este ID de utilizador.');
+        setIsSubmitting(false);
+        setErrorMsg(`Senha incorreta para o utilizador ${cleanId}.`);
         return;
       }
     }
 
-    setErrorMsg(`ID "${cleanId}" não cadastrado no sistema. Contacte o Diretor.`);
+    // Fallback para alunos
+    if (onOpenStudentPortal && (cleanId.startsWith('EUN') || cleanId.startsWith('MAT') || cleanId.startsWith('ALU'))) {
+      setIsSubmitting(false);
+      onOpenStudentPortal();
+      return;
+    }
+
+    setIsSubmitting(false);
+    setErrorMsg(`ID "${cleanId}" não cadastrado no sistema. Contacte o Diretor Geral ou os Recursos Humanos.`);
   };
 
   return (
@@ -206,7 +350,7 @@ export default function LoginScreen({
 
         {/* Login Box */}
         <div className="bg-slate-800/90 backdrop-blur-md rounded-2xl border border-slate-700/80 p-6 shadow-xl space-y-6">
-          {!hasDirectorGeral && (
+          {!hasRegisteredStaff && (
             <div className="bg-indigo-500/15 border border-indigo-500/40 text-indigo-300 text-xs p-4 rounded-xl flex flex-col gap-2 shadow-inner shadow-indigo-500/5">
               <div className="flex items-center gap-2 font-bold uppercase text-[10px] tracking-widest text-indigo-400 font-mono">
                 <Sparkles className="w-4 h-4 text-indigo-400 shrink-0" />
@@ -286,10 +430,20 @@ export default function LoginScreen({
 
             <button
               type="submit"
-              className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3 px-4 rounded-xl text-xs uppercase tracking-wide transition-all shadow-md shadow-indigo-600/15 cursor-pointer flex items-center justify-center gap-2 group animate-duration-100"
+              disabled={isSubmitting}
+              className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-70 text-white font-bold py-3 px-4 rounded-xl text-xs uppercase tracking-wide transition-all shadow-md shadow-indigo-600/15 cursor-pointer flex items-center justify-center gap-2 group animate-duration-100"
             >
-              <span>Entrar no Sistema</span>
-              <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-1" />
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin text-white" />
+                  <span>A Autenticar...</span>
+                </>
+              ) : (
+                <>
+                  <span>Entrar no Sistema</span>
+                  <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-1" />
+                </>
+              )}
             </button>
           </form>
 
@@ -310,7 +464,7 @@ export default function LoginScreen({
         </div>
 
         {/* Hardcoded Factory Account Notice for initial configuration when DB has no Director Geral */}
-        {!hasDirectorGeral && (
+        {!hasRegisteredStaff && (
           <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-5 space-y-3 shadow-md">
             <div className="flex items-center gap-2 border-b border-amber-500/20 pb-2">
               <Sparkles className="w-4 h-4 text-amber-400 animate-pulse" />

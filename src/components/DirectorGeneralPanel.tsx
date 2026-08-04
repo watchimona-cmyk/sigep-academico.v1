@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Staff, StaffRole } from '../types';
+import { Staff, StaffRole, StudentFinance } from '../types';
+import PainelAlertasChefia from './PainelAlertasChefia';
 import { 
   Shield, 
   ToggleLeft, 
@@ -42,6 +43,7 @@ export interface RolePermission {
 interface DirectorGeneralPanelProps {
   loggedInStaff: Staff;
   staffList: Staff[];
+  onUpdateStaffList?: (updatedStaffList: Staff[]) => void;
   permissions: RolePermission[];
   onUpdatePermissions: (newPerms: RolePermission[]) => void;
   auditLogs: AuditLog[];
@@ -53,11 +55,14 @@ interface DirectorGeneralPanelProps {
   schoolSettings?: any;
   onCloseAcademicYear?: (newYear: string) => void;
   onUpdateSchoolSettings?: (updated: any) => void;
+  financeRecords?: StudentFinance[];
+  onNavigateToFinance?: () => void;
 }
 
 export default function DirectorGeneralPanel({
   loggedInStaff,
   staffList,
+  onUpdateStaffList,
   permissions,
   onUpdatePermissions,
   auditLogs,
@@ -68,11 +73,30 @@ export default function DirectorGeneralPanel({
   resetConfirmActive = false,
   schoolSettings,
   onCloseAcademicYear,
-  onUpdateSchoolSettings
+  onUpdateSchoolSettings,
+  financeRecords = [],
+  onNavigateToFinance
 }: DirectorGeneralPanelProps) {
   const [logSearch, setLogSearch] = useState('');
   const [filterRole, setFilterRole] = useState<string>('ALL');
   const [activeRHReviewTab, setActiveRHReviewTab] = useState<'CHEFIA' | 'COORDENACAO' | 'PROFESSORES' | 'LIMPEZA' | 'SEGURANCA'>('CHEFIA');
+
+  const handleToggleCoordinatorSigepAccess = (staffId: string) => {
+    if (!onUpdateStaffList) return;
+    const updated = staffList.map(s => {
+      if (s.id === staffId) {
+        const currentlyAllowed = s.sigepAccessAllowed ?? true;
+        const nextAllowed = !currentlyAllowed;
+        return {
+          ...s,
+          sigepAccessAllowed: nextAllowed,
+          sigepAbsenceAccessOnly: nextAllowed
+        };
+      }
+      return s;
+    });
+    onUpdateStaffList(updated);
+  };
 
   // --- ESTADOS PARA FECHO DE ANO LECTIVO ---
   const [nextYearInput, setNextYearInput] = useState(() => {
@@ -397,6 +421,15 @@ export default function DirectorGeneralPanel({
         </div>
       </div>
 
+      {/* PAINEL CRÍTICO DE ALERTAS DA CHEFIA */}
+      <PainelAlertasChefia
+        loggedInStaff={loggedInStaff}
+        staffList={staffList}
+        financeRecords={financeRecords}
+        schoolSettings={schoolSettings}
+        onNavigateToFinance={onNavigateToFinance}
+      />
+
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         
         {/* Coluna 1 & 2: Delegação de Módulos & Permissões */}
@@ -627,13 +660,39 @@ export default function DirectorGeneralPanel({
                             )}
 
                             {activeRHReviewTab === 'COORDENACAO' && (
-                              <div className="flex flex-wrap gap-x-4 gap-y-1 text-teal-850">
-                                <div><strong>Função:</strong> {ROLE_LABELS_LOCAL[staff.role]}</div>
-                                {staff.tipoCoordenacao === 'DISCIPLINA' ? (
-                                  <div><strong>Disciplina Coordenada:</strong> {staff.disciplinaCoordenada || 'Não definida'}</div>
-                                ) : (
-                                  <div><strong>Turno Coordenado:</strong> {staff.turnoCoordenado || 'Não definido'}</div>
-                                )}
+                              <div className="space-y-2">
+                                <div className="flex flex-wrap gap-x-4 gap-y-1 text-teal-850">
+                                  <div><strong>Função:</strong> {ROLE_LABELS_LOCAL[staff.role]}</div>
+                                  {staff.tipoCoordenacao === 'DISCIPLINA' ? (
+                                    <div><strong>Disciplina Coordenada:</strong> {staff.disciplinaCoordenada || 'Não definida'}</div>
+                                  ) : (
+                                    <div><strong>Turno Coordenado:</strong> {staff.turnoCoordenado || 'Não definido'}</div>
+                                  )}
+                                </div>
+                                <div className="p-2.5 bg-teal-50/80 rounded-lg border border-teal-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-2 mt-2">
+                                  <div className="space-y-0.5">
+                                    <div className="text-[10px] font-extrabold text-teal-950 uppercase tracking-wide flex items-center gap-1.5">
+                                      <Shield className="w-3.5 h-3.5 text-teal-600" />
+                                      <span>Acesso ao SIGEP (Apenas Faltas)</span>
+                                    </div>
+                                    <p className="text-[9.5px] text-teal-800 font-medium leading-tight">
+                                      {(staff.sigepAccessAllowed ?? true)
+                                        ? 'Autorizado: Lança única e exclusivamente faltas. Propinas e cobranças ocultas.'
+                                        : 'Acesso suspenso pelo Director Geral.'}
+                                    </p>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleToggleCoordinatorSigepAccess(staff.id)}
+                                    className={`px-3 py-1 rounded-md text-[9.5px] font-extrabold uppercase tracking-wider transition-all cursor-pointer shrink-0 border ${
+                                      (staff.sigepAccessAllowed ?? true)
+                                        ? 'bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-200'
+                                        : 'bg-teal-600 hover:bg-teal-700 text-white border-teal-700'
+                                    }`}
+                                  >
+                                    {(staff.sigepAccessAllowed ?? true) ? 'Revogar Acesso' : 'Autorizar Acesso'}
+                                  </button>
+                                </div>
                               </div>
                             )}
 

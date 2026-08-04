@@ -105,6 +105,7 @@ export default function PortalAluno({ students, grades, onClose, schoolSettings 
   const [candAverage, setCandAverage] = useState(''); // Média certificado
   const [candSuccessMsg, setCandSuccessMsg] = useState('');
   const [candErrorMsg, setCandErrorMsg] = useState('');
+  const [lastSubmittedCandidate, setLastSubmittedCandidate] = useState<any>(null);
   
   // Active logged-in student
   const [activeStudent, setActiveStudent] = useState<Student | null>(null);
@@ -282,6 +283,7 @@ export default function PortalAluno({ students, grades, onClose, schoolSettings 
       id: candId,
       name: formatarNomeProprio(candName),
       gender: candGender as 'M' | 'F',
+      birthDate: candBirthDate,
       docType: candDocType,
       docNumber: candDocNumber.trim().toUpperCase(),
       biIssuerSector: candBiIssuerSector,
@@ -304,6 +306,7 @@ export default function PortalAluno({ students, grades, onClose, schoolSettings 
     const updatedCandidates = [...existingCandidates, newCandidate];
     localStorage.setItem('sigep_candidates_v1', JSON.stringify(updatedCandidates));
 
+    setLastSubmittedCandidate(newCandidate);
     setCandSuccessMsg(`Candidatura submetida com absoluto sucesso! O seu Código de Candidatura é: ${candId}. Guarde este código para consulta ou para que a secretaria proceda à sua matrícula.`);
     
     // Limpar campos
@@ -445,12 +448,27 @@ export default function PortalAluno({ students, grades, onClose, schoolSettings 
               )}
 
               {candSuccessMsg && (
-                <div className="bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs p-4 rounded-xl flex items-start gap-2.5">
-                  <CheckCircle className="w-5 h-5 shrink-0 text-emerald-400 mt-0.5" />
-                  <div className="space-y-1">
-                    <p className="font-bold uppercase tracking-wide">Sucesso!</p>
-                    <p className="leading-relaxed font-semibold">{candSuccessMsg}</p>
+                <div className="bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs p-4 rounded-xl space-y-3">
+                  <div className="flex items-start gap-2.5">
+                    <CheckCircle className="w-5 h-5 shrink-0 text-emerald-400 mt-0.5" />
+                    <div className="space-y-1">
+                      <p className="font-bold uppercase tracking-wide">Inscrição Submetida com Sucesso!</p>
+                      <p className="leading-relaxed font-semibold">{candSuccessMsg}</p>
+                    </div>
                   </div>
+                  {lastSubmittedCandidate && (
+                    <div className="pt-3 border-t border-emerald-500/20 flex flex-wrap gap-2 items-center justify-between">
+                      <span className="text-[11px] text-emerald-300 font-medium">Baixe agora a sua ficha / comprovativo de candidatura:</span>
+                      <button
+                        type="button"
+                        onClick={() => downloadComprovativoPDF(lastSubmittedCandidate, 'CANDIDATURA', schoolSettings)}
+                        className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-2 rounded-lg text-xs uppercase tracking-wider transition-all flex items-center gap-1.5 shadow-md cursor-pointer"
+                      >
+                        <Download className="w-4 h-4" />
+                        <span>Descarregar Ficha de Inscrição (PDF)</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
 

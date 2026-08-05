@@ -1190,7 +1190,7 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
           const assignedTeacher = staffList.find(s => 
             s.classes?.includes(activeClass) && 
             s.sections?.includes(activeSection) && 
-            s.subjects?.includes(activeSubject)
+            s.subjects?.includes(activeSubject as SubjectType)
           );
           const profName = isBlankMode 
             ? (assignedTeacher?.name || '___________________________') 
@@ -2175,7 +2175,7 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
 
     // Verify catalog list
     const subjectsOfProf = matched.subjects || [];
-    if (!subjectsOfProf.includes(profSelectedSubject)) {
+    if (!subjectsOfProf.includes(profSelectedSubject as SubjectType)) {
       setProfError(`Bloqueio de Segurança: Não tem autorização para aceder à disciplina de ${profSelectedSubject}. Esta matéria não consta no seu catálogo de docência.`);
       return;
     }
@@ -2648,7 +2648,7 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
                         const colSeed = subIdx * (useNpp ? 4 : 3);
 
                         const isEditingMac = editingCell?.studentId === student.id && editingCell?.subject === subject && editingCell?.field === 'mac';
-                        const isEditingNpp = editingCell?.studentId === student.id && editingCell?.subject === subject && editingCell?.field === 'npp';
+                        const isEditingNpp = editingCell?.studentId === student.id && editingCell?.subject === subject && (editingCell?.field as string) === 'npp';
                         const isEditingNpt = editingCell?.studentId === student.id && editingCell?.subject === subject && editingCell?.field === 'npt';
 
                         const renderEditCell = (field: 'mac' | 'npp' | 'npt', isEd: boolean, val: number | null, index: number) => {

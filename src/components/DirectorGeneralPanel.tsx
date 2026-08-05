@@ -600,6 +600,7 @@ export default function DirectorGeneralPanel({
                   SUB_DIRECTOR_PEDAGOGICO: 'Subdirector Pedagógico',
                   SUB_DIRECTOR_ADMINISTRATIVO: 'Subdirector Administrativo',
                   CHEFE_SECRETARIA: 'Chefe de Secretaria',
+                  COORDENADOR: 'Coordenador',
                   COORDENADOR_TURNO: 'Coordenador de Turno',
                   COORDENADOR_DISCIPLINA: 'Coordenador de Disciplina',
                   PROFESSOR: 'Professor de Disciplina',
@@ -885,12 +886,20 @@ export default function DirectorGeneralPanel({
 
             {/* Gestão de Abertura e Fecho de Trimestres */}
             <div className="p-4 bg-slate-50 border border-slate-150 rounded-xl space-y-4">
-              <div>
-                <span className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Abertura e Fecho de Trimestres</span>
-                <p className="text-[9px] text-slate-400 leading-snug">
-                  Os trimestres devem ser fechados de forma sequencial. O sistema impede de forma absoluta o lançamento no trimestre seguinte se o anterior estiver aberto.
-                </p>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Lock className="w-4 h-4 text-indigo-600" />
+                  <h4 className="text-xs font-black text-slate-800 uppercase tracking-wider">
+                    Gestão de Estado dos Trimestres Financeiros (Abertura / Fecho)
+                  </h4>
+                </div>
+                <span className="text-[10px] font-bold text-indigo-800 bg-indigo-100/80 px-2 py-0.5 rounded-md shrink-0">
+                  Controlo do Director Geral & Subdirector Administrativo
+                </span>
               </div>
+              <p className="text-[9px] text-slate-400 leading-snug">
+                Os trimestres devem ser fechados de forma sequencial. O sistema impede de forma absoluta o lançamento no trimestre seguinte se o anterior estiver aberto.
+              </p>
 
               <div className="grid grid-cols-3 gap-3">
                 {/* Trimestre I */}

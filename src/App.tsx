@@ -104,7 +104,7 @@ const DEFAULT_SCHOOL_SETTINGS: SchoolSettings = {
   privateLogoUrl: '🎓',
   publicLogoUrl: '🇦🇴',
   syncEnabled: false,
-  syncServerUrl: typeof window !== 'undefined' ? window.location.origin : "http://localhost:3000",
+  syncServerUrl: "",
   academicYear: "2025/2026",
   activeComponents: {
     ENSINO_PRIMARIO: true,
@@ -1115,6 +1115,9 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
         try {
           const parsed = JSON.parse(savedSettings);
           if (parsed && typeof parsed === 'object') {
+            if (parsed.syncServerUrl === 'http://localhost:3000') {
+              parsed.syncServerUrl = '';
+            }
             setSchoolSettings({
               ...DEFAULT_SCHOOL_SETTINGS,
               ...parsed
@@ -1204,7 +1207,13 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
   };
 
   const pushData = async (settingsToUse = schoolSettings) => {
-    const url = settingsToUse.syncServerUrl || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000');
+    let rawUrl = settingsToUse.syncServerUrl || (typeof window !== 'undefined' ? window.location.origin : '');
+    if (!rawUrl) rawUrl = typeof window !== 'undefined' ? window.location.origin : '';
+    if (!/^https?:\/\//i.test(rawUrl)) {
+      rawUrl = 'http://' + rawUrl;
+    }
+    const url = rawUrl.replace(/\/$/, '');
+
     setVbaLog("Iniciando envio (Push) de dados locais para o banco PostgreSQL central...");
     
     // Alunos
@@ -1260,15 +1269,30 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
     if (!resConfig.ok) throw new Error("Erro ao sincronizar configurações institucionais");
 
     setVbaLog("Sincronização Push: Todos os dados locais foram carregados com sucesso no PostgreSQL!");
+
+    return {
+      studentsCount: students?.length || 0,
+      staffCount: staffList?.length || 0,
+      gradesCount: grades?.length || 0,
+      propinasCount: propinas?.length || 0,
+      grelhaCount: Array.isArray(grelha) ? grelha.length : 0
+    };
   };
 
   const pullData = async (settingsToUse = schoolSettings) => {
-    let url = settingsToUse.syncServerUrl || '';
+    let rawUrl = settingsToUse.syncServerUrl || '';
     if (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-      if (url.includes('localhost') || url.includes('127.0.0.1')) {
-        url = '';
+      if (rawUrl.includes('localhost') || rawUrl.includes('127.0.0.1')) {
+        rawUrl = '';
       }
     }
+    if (!rawUrl && typeof window !== 'undefined') {
+      rawUrl = window.location.origin;
+    }
+    if (rawUrl && !/^https?:\/\//i.test(rawUrl)) {
+      rawUrl = 'http://' + rawUrl;
+    }
+    const url = rawUrl ? rawUrl.replace(/\/$/, '') : '';
 
     setVbaLog("Buscando dados remotos do PostgreSQL central...");
 
@@ -1317,7 +1341,19 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
       safeSetItem('sigep_grelha_curricular_pedagogia_v5_magisterio', JSON.stringify(gotGrelha));
     }
 
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('sigep:data-updated'));
+    }
+
     setVbaLog("Importação concluída: Todos os dados foram atualizados a partir do PostgreSQL!");
+
+    return {
+      studentsCount: Array.isArray(gotStudents) ? gotStudents.length : 0,
+      staffCount: Array.isArray(gotStaff) ? gotStaff.length : 0,
+      gradesCount: Array.isArray(gotGrades) ? gotGrades.length : 0,
+      propinasCount: Array.isArray(gotPropinas) ? gotPropinas.length : 0,
+      grelhaCount: Array.isArray(gotGrelha) ? gotGrelha.length : 0
+    };
   };
 
   // Automatic Sync Pull on Mount (Garante que qualquer navegador cliente no Wi-Fi/LAN receba os dados do Servidor Central)
@@ -1394,6 +1430,9 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
         }
 
         setVbaLog("Sincronização Automática: Todos os dados foram atualizados com sucesso a partir do Servidor Central!");
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('sigep:data-updated'));
+        }
       } catch (err: any) {
         setVbaLog(`Aviso de Sincronização: Executando no modo local offline.`);
       }
@@ -1401,6 +1440,68 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
 
     autoPullOnStart();
   }, []);
+
+  // Motor de Sincronização Contínua em Tempo Real via LAN / Wi-Fi (SSE + Polling de Contingência)
+  useEffect(() => {
+    let eventSource: EventSource | null = null;
+    let pollTimer: any = null;
+    let lastKnownVersion = 0;
+
+    const setupRealtimeConnection = () => {
+      try {
+        const streamUrl = schoolSettings.syncEnabled && schoolSettings.syncServerUrl 
+          ? `${schoolSettings.syncServerUrl}/api/realtime/events`
+          : '/api/realtime/events';
+
+        eventSource = new EventSource(streamUrl);
+
+        eventSource.addEventListener('DATA_UPDATED', (e: MessageEvent) => {
+          try {
+            const data = JSON.parse(e.data);
+            if (data.timestamp && data.timestamp > lastKnownVersion) {
+              lastKnownVersion = data.timestamp;
+              pullData().catch(() => {});
+            }
+          } catch (err) {
+            console.warn("Erro ao processar evento de sincronização em tempo real:", err);
+          }
+        });
+
+        eventSource.onerror = () => {
+          // Fallback silencioso mantendo o canal limpo
+        };
+      } catch (err) {
+        console.warn("Sincronização SSE em tempo real indisponível. Recorrendo ao polling de contingência.");
+      }
+    };
+
+    setupRealtimeConnection();
+
+    // Polling de contingência a cada 4 segundos para atualizar caso haja alterações de outros dispositivos na rede LAN/Wi-Fi
+    pollTimer = setInterval(async () => {
+      try {
+        const versionUrl = schoolSettings.syncEnabled && schoolSettings.syncServerUrl 
+          ? `${schoolSettings.syncServerUrl}/api/realtime/version`
+          : '/api/realtime/version';
+
+        const res = await fetch(versionUrl);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.version && data.version > lastKnownVersion) {
+            if (lastKnownVersion > 0) {
+              pullData().catch(() => {});
+            }
+            lastKnownVersion = data.version;
+          }
+        }
+      } catch {}
+    }, 4000);
+
+    return () => {
+      if (eventSource) eventSource.close();
+      if (pollTimer) clearInterval(pollTimer);
+    };
+  }, [schoolSettings.syncEnabled, schoolSettings.syncServerUrl]);
 
   // Proteção de rotas em tempo real: verifica se o Diretor Geral já existe na base de dados (hasDirectorGeral)
   useEffect(() => {
@@ -1650,14 +1751,27 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
     }
   };
 
-  // Sync to localstorage
+  // Sync to localstorage & backend
   const saveState = (updatedStudents: Student[], updatedGrades: GradeRow[]) => {
     setStudents(updatedStudents);
     setGrades(updatedGrades);
     safeSetItem(LOCAL_STORAGE_STUDENTS_KEY, JSON.stringify(updatedStudents));
     safeSetItem(LOCAL_STORAGE_GRADES_KEY, JSON.stringify(updatedGrades));
 
-    // Background push to PostgreSQL if enabled
+    // Sempre envia a atualização para o backend local Express em tempo real
+    fetch('/api/alunos/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updatedStudents)
+    }).catch(err => console.warn("Erro ao sincronizar alunos com o backend local:", err));
+
+    fetch('/api/notas/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updatedGrades)
+    }).catch(err => console.warn("Erro ao sincronizar notas com o backend local:", err));
+
+    // Sincronização secundária para Servidor PostgreSQL remoto caso configurado
     if (schoolSettings.syncEnabled && schoolSettings.syncServerUrl) {
       const url = schoolSettings.syncServerUrl;
       fetch(`${url}/api/alunos/sync`, {
@@ -1698,7 +1812,7 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
           newGrades.push({
             studentId: newStudent.id,
             studentName: newStudent.name,
-            subject: sub,
+            subject: sub as SubjectType,
             trimester: tri,
             mac: null,
             npt: null,
@@ -3302,7 +3416,7 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
                       type="button"
                       onClick={() => setActiveTab('RELACAO_NOMINAL')}
                       className={`flex items-center gap-2 px-3 py-2 rounded-xl text-[11.5px] font-heading font-bold uppercase tracking-wide transition-all whitespace-nowrap ${
-                        activeTab === 'RELACAO_NOMINAL'
+                        (activeTab as string) === 'RELACAO_NOMINAL'
                           ? 'bg-indigo-600 text-white shadow-xs'
                           : 'text-slate-600 hover:bg-slate-100'
                       }`}
@@ -3315,7 +3429,7 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
                       type="button"
                       onClick={() => setActiveTab('AREA_ACADEMICA')}
                       className={`flex items-center gap-2 px-3 py-2 rounded-xl text-[11.5px] font-heading font-bold uppercase tracking-wide transition-all whitespace-nowrap ${
-                        activeTab === 'AREA_ACADEMICA'
+                        (activeTab as string) === 'AREA_ACADEMICA'
                           ? 'bg-indigo-600 text-white shadow-xs'
                           : 'text-slate-600 hover:bg-slate-100'
                       }`}
@@ -3328,7 +3442,7 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
                       type="button"
                       onClick={() => setActiveTab('FINANCEIRO')}
                       className={`flex items-center gap-2 px-3 py-2 rounded-xl text-[11.5px] font-heading font-bold uppercase tracking-wide transition-all whitespace-nowrap ${
-                        activeTab === 'FINANCEIRO'
+                        (activeTab as string) === 'FINANCEIRO'
                           ? 'bg-indigo-600 text-white shadow-xs'
                           : 'text-slate-600 hover:bg-slate-100'
                       }`}
@@ -3341,7 +3455,7 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
                       type="button"
                       onClick={() => setActiveTab('MINI_PAUTA1_BANCODADOS')}
                       className={`flex items-center gap-2 px-3 py-2 rounded-xl text-[11.5px] font-heading font-bold uppercase tracking-wide transition-all whitespace-nowrap ${
-                        activeTab === 'MINI_PAUTA1_BANCODADOS'
+                        (activeTab as string) === 'MINI_PAUTA1_BANCODADOS'
                           ? 'bg-indigo-600 text-white shadow-xs'
                           : 'text-slate-600 hover:bg-slate-100'
                       }`}
@@ -3354,7 +3468,7 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
                       type="button"
                       onClick={() => setActiveTab('CABECALHO')}
                       className={`flex items-center gap-2 px-3 py-2 rounded-xl text-[11.5px] font-heading font-bold uppercase tracking-wide transition-all whitespace-nowrap ${
-                        activeTab === 'CABECALHO'
+                        (activeTab as string) === 'CABECALHO'
                           ? 'bg-indigo-600 text-white shadow-xs'
                           : 'text-slate-600 hover:bg-slate-100'
                       }`}
@@ -3367,7 +3481,7 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
                       type="button"
                       onClick={() => setActiveTab('RECURSOS_HUMANOS')}
                       className={`flex items-center gap-2 px-3 py-2 rounded-xl text-[11.5px] font-heading font-bold uppercase tracking-wide transition-all whitespace-nowrap ${
-                        activeTab === 'RECURSOS_HUMANOS'
+                        (activeTab as string) === 'RECURSOS_HUMANOS'
                           ? 'bg-indigo-600 text-white shadow-xs'
                           : 'text-slate-600 hover:bg-slate-100'
                       }`}
@@ -3382,7 +3496,7 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
                   type="button"
                   onClick={() => setActiveTab('UTILIZADOR')}
                   className={`flex items-center gap-2 px-3 py-2 rounded-xl text-[11.5px] font-heading font-bold uppercase tracking-wide transition-all whitespace-nowrap ${
-                    activeTab === 'UTILIZADOR'
+                    (activeTab as string) === 'UTILIZADOR'
                       ? 'bg-indigo-600 text-white shadow-xs'
                       : 'text-slate-600 hover:bg-slate-100'
                   }`}

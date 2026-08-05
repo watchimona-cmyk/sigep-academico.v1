@@ -8,9 +8,7 @@ import os from 'os';
 import { exec } from 'child_process';
 import { fileURLToPath } from 'url';
 
-const appDir = typeof __dirname !== 'undefined'
-  ? __dirname
-  : path.dirname(fileURLToPath(import.meta.url));
+const appDir = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
 
 dotenv.config();
 
@@ -677,6 +675,43 @@ async function initializeDatabase() {
 
 initializeDatabase();
 
+// === REAL-TIME CONTINUOUS SYNC BROADCASTER (LAN / Wi-Fi) ===
+const sseClients = new Set<express.Response>();
+let dataVersion = Date.now();
+
+function notifyRealtimeClients(entity?: string) {
+  dataVersion = Date.now();
+  const payload = JSON.stringify({ timestamp: dataVersion, entity: entity || 'ALL' });
+  for (const client of sseClients) {
+    try {
+      client.write(`event: DATA_UPDATED\ndata: ${payload}\n\n`);
+    } catch {
+      sseClients.delete(client);
+    }
+  }
+}
+
+app.get('/api/realtime/events', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  if (typeof (res as any).flushHeaders === 'function') {
+    (res as any).flushHeaders();
+  }
+
+  res.write(`event: CONNECTED\ndata: ${JSON.stringify({ version: dataVersion, time: new Date().toISOString() })}\n\n`);
+  sseClients.add(res);
+
+  req.on('close', () => {
+    sseClients.delete(res);
+  });
+});
+
+app.get('/api/realtime/version', (req, res) => {
+  res.json({ version: dataVersion, time: new Date().toISOString() });
+});
+
 // --- API ROUTES ---
 
 // AUTH & MAINTENANCE ENDPOINTS
@@ -912,6 +947,7 @@ app.post('/api/alunos', async (req, res) => {
       cedulaRegisto, cedulaFls, cedulaLivro, cedulaAno, periodo, specialty
     ]);
     res.json({ success: true, message: 'Aluno gravado com sucesso' });
+    notifyRealtimeClients('alunos');
   } catch (err: any) {
     console.error('Erro ao gravar aluno:', err);
     res.status(500).json({ error: err.message });
@@ -989,6 +1025,7 @@ app.post('/api/alunos/sync', async (req, res) => {
     }
     await pool.query('COMMIT');
     res.json({ success: true, count: students.length });
+    notifyRealtimeClients('alunos');
   } catch (err: any) {
     await pool.query('ROLLBACK');
     console.error('Erro ao sincronizar alunos em lote:', err);
@@ -1001,6 +1038,7 @@ app.delete('/api/alunos/:id', async (req, res) => {
   try {
     await pool.query('DELETE FROM alunos WHERE id = $1', [id]);
     res.json({ success: true });
+    notifyRealtimeClients('alunos');
   } catch (err: any) {
     console.error('Erro ao deletar aluno:', err);
     res.status(500).json({ error: err.message });
@@ -1054,6 +1092,7 @@ app.post('/api/notas/sync', async (req, res) => {
     }
     await pool.query('COMMIT');
     res.json({ success: true, count: grades.length });
+    notifyRealtimeClients('notas');
   } catch (err: any) {
     await pool.query('ROLLBACK');
     console.error('Erro ao sincronizar notas:', err);
@@ -1099,6 +1138,7 @@ app.post('/api/funcionarios', async (req, res) => {
       password || '12345'
     ]);
     res.json({ success: true });
+    notifyRealtimeClients('funcionarios');
   } catch (err: any) {
     console.error('Erro ao gravar funcionário:', err);
     res.status(500).json({ error: err.message });
@@ -1138,6 +1178,7 @@ app.post('/api/funcionarios/sync', async (req, res) => {
     }
     await pool.query('COMMIT');
     res.json({ success: true, count: staff.length });
+    notifyRealtimeClients('funcionarios');
   } catch (err: any) {
     await pool.query('ROLLBACK');
     console.error('Erro ao sincronizar funcionários:', err);
@@ -1153,6 +1194,7 @@ app.delete('/api/funcionarios/:id', async (req, res) => {
   try {
     await pool.query('DELETE FROM funcionarios WHERE id = $1', [id]);
     res.json({ success: true });
+    notifyRealtimeClients('funcionarios');
   } catch (err: any) {
     console.error('Erro ao deletar funcionário:', err);
     res.status(500).json({ error: err.message });
@@ -1209,6 +1251,7 @@ app.post('/api/grelha/sync', async (req, res) => {
     }
     await pool.query('COMMIT');
     res.json({ success: true, count: items.length });
+    notifyRealtimeClients('grelha');
   } catch (err: any) {
     await pool.query('ROLLBACK');
     console.error('Erro ao sincronizar grelha:', err);
@@ -1228,6 +1271,7 @@ app.post('/api/grelha/reorder', async (req, res) => {
     }
     await pool.query('COMMIT');
     res.json({ success: true });
+    notifyRealtimeClients('grelha');
   } catch (err: any) {
     await pool.query('ROLLBACK');
     console.error('Erro ao reordenar grelha:', err);
@@ -1241,6 +1285,7 @@ app.put('/api/grelha/:id/toggle', async (req, res) => {
   try {
     await pool.query('UPDATE grelha_curricular SET active = $1 WHERE id = $2', [active, id]);
     res.json({ success: true });
+    notifyRealtimeClients('grelha');
   } catch (err: any) {
     console.error('Erro ao alternar estado da disciplina:', err);
     res.status(500).json({ error: err.message });
@@ -1252,6 +1297,7 @@ app.delete('/api/grelha/:id', async (req, res) => {
   try {
     await pool.query('DELETE FROM grelha_curricular WHERE id = $1', [id]);
     res.json({ success: true });
+    notifyRealtimeClients('grelha');
   } catch (err: any) {
     console.error('Erro ao excluir vínculo curricular:', err);
     res.status(500).json({ error: err.message });
@@ -1283,6 +1329,7 @@ app.post('/api/grelha/reset', async (req, res) => {
     }
     await pool.query('COMMIT');
     res.json({ success: true, count: items.length });
+    notifyRealtimeClients('grelha');
   } catch (err: any) {
     await pool.query('ROLLBACK');
     console.error('Erro ao reiniciar grelha curricular no PostgreSQL:', err);
@@ -1368,6 +1415,7 @@ app.post('/api/propinas/sync', async (req, res) => {
     }
     await pool.query('COMMIT');
     res.json({ success: true, count: records.length });
+    notifyRealtimeClients('propinas');
   } catch (err: any) {
     await pool.query('ROLLBACK');
     console.error('Erro ao sincronizar propinas:', err);
@@ -1412,6 +1460,7 @@ app.post('/api/config', async (req, res) => {
     }
     await pool.query('COMMIT');
     res.json({ success: true });
+    notifyRealtimeClients('config');
   } catch (err: any) {
     await pool.query('ROLLBACK');
     console.error('Erro ao gravar configurações:', err);
@@ -2206,17 +2255,39 @@ app.get('/api/health', async (req, res) => {
 });
 
 // Configure Vite middleware or static files serving
+function getDistPath(): string {
+  const candidates = [
+    __dirname,
+    path.join(__dirname, 'dist'),
+    path.join(__dirname, '..', 'dist'),
+    path.join(process.cwd(), 'dist'),
+    process.cwd()
+  ];
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(path.join(candidate, 'index.html'))) {
+      return candidate;
+    }
+  }
+
+  return path.join(process.cwd(), 'dist');
+}
+
 async function setupViteAndListen() {
   const PORT = 3000; // MUST run on port 3000 as per environment constraints
-  const isProduction = process.env.NODE_ENV === "production" || fs.existsSync(path.join(appDir, 'index.html'));
+  const isProduction = process.env.NODE_ENV === "production";
   
   function serveStatic() {
-    const distPath = fs.existsSync(path.join(appDir, 'index.html'))
-      ? appDir
-      : path.join(process.cwd(), 'dist');
+    const distPath = getDistPath();
+    console.log(`[SIGEP Server] Servindo arquivos estáticos de: ${distPath}`);
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+      const indexPath = path.join(distPath, 'index.html');
+      if (fs.existsSync(indexPath)) {
+        res.sendFile(indexPath);
+      } else {
+        res.status(404).send(`SIGEP: index.html não localizado no diretório ${distPath}`);
+      }
     });
   }
 

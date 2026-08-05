@@ -836,7 +836,17 @@ export interface StudentFinance {
   attendanceDates?: Record<string, 'NORMAL' | 'INJUSTIFICADA' | 'JUSTIFICADA'>;
 }
 
-export type UserRole = 'SUB_DIRECTOR_PEDAGOGICO' | 'SECRETARIO' | 'PROFESSOR';
+export type UserRole = 
+  | 'DIRECTOR_GERAL'
+  | 'SUB_DIRECTOR_PEDAGOGICO'
+  | 'SUB_DIRECTOR_ADMINISTRATIVO'
+  | 'CHEFE_SECRETARIA'
+  | 'COORDENADOR'
+  | 'COORDENADOR_TURNO'
+  | 'COORDENADOR_DISCIPLINA'
+  | 'SECRETARIO'
+  | 'PROFESSOR'
+  | 'SIGEP';
 
 export type StaffRole = 
   | 'DIRECTOR_GERAL'

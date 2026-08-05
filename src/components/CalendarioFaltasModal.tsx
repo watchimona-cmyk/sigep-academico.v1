@@ -391,10 +391,14 @@ export default function CalendarioFaltasModal({
                   <div className="w-full flex items-center justify-between px-0.5">
                     <span className="text-xs font-mono">{dayNum}</span>
                     {status === 'JUSTIFICADA' && (
-                      <Lock className="w-3 h-3 text-emerald-200 fill-emerald-200/20" title="Justificada na Secretaria - Cadeado Verde" />
+                      <span title="Justificada na Secretaria - Cadeado Verde">
+                        <Lock className="w-3 h-3 text-emerald-200 fill-emerald-200/20" />
+                      </span>
                     )}
                     {status === 'INJUSTIFICADA' && (
-                      <Lock className="w-3 h-3 text-white/90" title="Falta Injustificada - Bloqueada" />
+                      <span title="Falta Injustificada - Bloqueada">
+                        <Lock className="w-3 h-3 text-white/90" />
+                      </span>
                     )}
                   </div>
                   

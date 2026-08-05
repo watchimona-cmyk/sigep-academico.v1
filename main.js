@@ -9,6 +9,10 @@ const fs = require('fs');
 const http = require('http');
 const { autoUpdater } = require('electron-updater');
 
+if (app.isPackaged) {
+  process.env.NODE_ENV = 'production';
+}
+
 let mainWindow;
 let isQuitting = false;
 

@@ -223,7 +223,7 @@ const MapaAproveitamento: React.FC<MapaAproveitamentoProps> = ({ students, grade
 
       // 4. Desistentes - DADO DINÂMICO CONFORME O TRIMESTRE
       const desistenteStudents = classStudents.filter(s => {
-        if (s.status !== 'Desistente' && s.status !== 'Inactivo') return false;
+        if ((s.status as string) !== 'Desistente' && (s.status as string) !== 'Inactivo') return false;
         const eventTri = getStudentEventTrimester(s, 'desistencia', currentGrades);
         return isTrimesterMatch(eventTri, trimestreSelecionado);
       });
@@ -243,7 +243,7 @@ const MapaAproveitamento: React.FC<MapaAproveitamentoProps> = ({ students, grade
           const triOrder = { 'I': 1, 'II': 2, 'III': 3 };
           if (triOrder[trimestreSelecionado] > triOrder[saidaTri]) return;
         }
-        if (student.status === 'Desistente' || student.status === 'Inactivo') {
+        if ((student.status as string) === 'Desistente' || (student.status as string) === 'Inactivo') {
           const desistTri = getStudentEventTrimester(student, 'desistencia', currentGrades);
           const triOrder = { 'I': 1, 'II': 2, 'III': 3 };
           if (triOrder[trimestreSelecionado] > triOrder[desistTri]) return;

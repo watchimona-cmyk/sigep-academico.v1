@@ -737,10 +737,10 @@ export default function StudentDirectory({
       naturalidade: newNaturalidade,
       birthDate: newBirthDate,
       contact: newContact.trim(),
-      periodo: newPeriod,
+      periodo: newPeriod as any,
       age: calculateAge(newBirthDate),
       foreignLanguage: isNivel3(newClass) ? newForeignLanguage : undefined,
-      specialty: (isPUNIV || isMagisterio) ? newSpecialty : undefined,
+      specialty: (isPUNIV || isMagisterio) ? (newSpecialty as any) : undefined,
       isTransferidoEntrada: isTransferidoEntrada,
       isTransferidoSaida: isTransferidoSaida,
       dataTransferenciaSaida: isTransferidoSaida ? (editingStudentId ? (students.find(s => s.id === editingStudentId)?.dataTransferenciaSaida || new Date().toLocaleDateString('pt-AO')) : new Date().toLocaleDateString('pt-AO')) : undefined

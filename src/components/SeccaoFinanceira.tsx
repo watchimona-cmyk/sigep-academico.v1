@@ -5,6 +5,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { Student, StudentFinance, UserRole, Staff, SchoolSettings } from '../types';
+import { useSchoolSettings, ANGOLAN_SUBSYSTEMS } from '../context/SchoolSettingsContext';
 import CalendarioFaltasModal from './CalendarioFaltasModal';
 import PainelAlertasChefia from './PainelAlertasChefia';
 import {
@@ -113,6 +114,13 @@ export default function SeccaoFinanceira({
   // Fee values
   const savePropinas = (updatedList: StudentFinance[]) => {
     localStorage.setItem('sigep_propinas_v1', JSON.stringify(updatedList));
+    // Always push to local backend endpoint so server updates in real-time
+    fetch('/api/propinas/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updatedList)
+    }).catch(err => console.warn("Erro ao salvar propinas no backend local:", err));
+
     try {
       const savedSettings = localStorage.getItem('sigep_school_settings_v1');
       if (savedSettings) {
@@ -160,6 +168,27 @@ export default function SeccaoFinanceira({
     }
     return [];
   });
+
+  // Escutar eventos de atualização remota de dados em tempo real
+  useEffect(() => {
+    const handleDataUpdated = () => {
+      const saved = localStorage.getItem('sigep_propinas_v1');
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed)) {
+            setFinanceRecords(parsed);
+          }
+        } catch {}
+      }
+    };
+    window.addEventListener('sigep:data-updated', handleDataUpdated);
+    window.addEventListener('storage', handleDataUpdated);
+    return () => {
+      window.removeEventListener('sigep:data-updated', handleDataUpdated);
+      window.removeEventListener('storage', handleDataUpdated);
+    };
+  }, []);
 
   // Keep finance records in sync with students list
   useEffect(() => {
@@ -285,13 +314,110 @@ export default function SeccaoFinanceira({
   const [selectedTrimester, setSelectedTrimester] = useState<number | 'TODOS'>(1);
   const [calendarStudentModal, setCalendarStudentModal] = useState<StudentFinance | null>(null);
 
-  const schoolSettings: SchoolSettings | undefined = React.useMemo(() => {
-    const saved = localStorage.getItem('sigep_school_settings_v1');
-    if (saved) {
-      try { return JSON.parse(saved); } catch (e) { return undefined; }
+  const {
+    schoolSettings,
+    updateSchoolSettings,
+    activeSubsystem,
+    subsystemInfo,
+    isClassAllowed,
+    getAvailableClasses
+  } = useSchoolSettings();
+
+  const cleanClassStr = (cls?: string) => cls ? cls.toString().replace(/ª/g, '').replace(/Classe/gi, '').trim() : '';
+
+  const isAllowedClass = React.useCallback((cls?: string) => {
+    const c = cleanClassStr(cls);
+    return isClassAllowed(c);
+  }, [isClassAllowed]);
+
+  // Hermetically filter finance records by active subsystem
+  const activeFinanceRecords = React.useMemo(() => {
+    return financeRecords.filter(r => isAllowedClass(r.class));
+  }, [financeRecords, isAllowedClass, activeSubsystem, subsystemInfo]);
+
+  // Registos financeiros e de faltas dinâmicos filtrados estritamente pelo Trimestre Seleccionado
+  const selectedTrimesterRecords = React.useMemo(() => {
+    if (selectedTrimester === 'TODOS') {
+      return activeFinanceRecords;
     }
-    return undefined;
-  }, []);
+
+    let monthIndices: number[] = [];
+    if (selectedTrimester === 1) monthIndices = [0, 1, 2];
+    else if (selectedTrimester === 2) monthIndices = [3, 4, 5];
+    else if (selectedTrimester === 3) monthIndices = [6, 7, 8, 9, 10];
+
+    const today = new Date();
+    let currentSchoolMonthIndex = 0;
+    const currentMonth = today.getMonth();
+    if (currentMonth >= 8) {
+      currentSchoolMonthIndex = currentMonth - 8;
+    } else {
+      currentSchoolMonthIndex = currentMonth + 4;
+    }
+    currentSchoolMonthIndex = Math.min(10, Math.max(0, currentSchoolMonthIndex));
+
+    return activeFinanceRecords.map(rec => {
+      if (rec.modalidade === 'Integral') {
+        return {
+          ...rec,
+          totalPago: 0,
+          totalDivida: 0
+        };
+      }
+
+      const discountPerc = parseFloat((rec.desconto || '0%').replace('%', '')) || 0;
+      const netFee = vMensal * (1 - discountPerc / 100);
+
+      let triPago = 0;
+      let triDivida = 0;
+
+      monthIndices.forEach(idx => {
+        if (rec.mesesPagos && rec.mesesPagos[idx]) {
+          triPago += netFee;
+        } else {
+          if (idx < currentSchoolMonthIndex || (idx === currentSchoolMonthIndex && today.getDate() > 10)) {
+            let monthDebt = netFee;
+            if (rec.modalidade === 'Regular' && isMonthOverdue(idx, today)) {
+              monthDebt += vMulta;
+            }
+            triDivida += monthDebt;
+          }
+        }
+      });
+
+      // Filtragem dinâmica de assiduidade/faltas por trimestre
+      let triInjustificadas = 0;
+      let triJustificadas = 0;
+
+      if (rec.attendanceDates && Object.keys(rec.attendanceDates).length > 0) {
+        Object.entries(rec.attendanceDates).forEach(([dateStr, status]) => {
+          const date = new Date(dateStr);
+          const m = date.getMonth();
+          let inTri = false;
+          if (selectedTrimester === 1 && (m === 8 || m === 9 || m === 10)) inTri = true;
+          else if (selectedTrimester === 2 && (m === 11 || m === 0 || m === 1)) inTri = true;
+          else if (selectedTrimester === 3 && (m === 2 || m === 3 || m === 4 || m === 5 || m === 6)) inTri = true;
+
+          if (inTri) {
+            if (status === 'INJUSTIFICADA') triInjustificadas++;
+            else if (status === 'JUSTIFICADA') triJustificadas++;
+          }
+        });
+      } else {
+        const factor = selectedTrimester === 3 ? (5 / 11) : (3 / 11);
+        triInjustificadas = Math.round((rec.faltasInjustificadas || 0) * factor);
+        triJustificadas = Math.round((rec.faltasJustificadas || 0) * factor);
+      }
+
+      return {
+        ...rec,
+        totalPago: triPago,
+        totalDivida: triDivida,
+        faltasInjustificadas: triInjustificadas,
+        faltasJustificadas: triJustificadas
+      };
+    });
+  }, [activeFinanceRecords, selectedTrimester, vMensal, vMulta]);
 
   const subdirectorAdminName = React.useMemo(() => {
     const sda = staffList.find(s => s.role === 'SUB_DIRECTOR_ADMINISTRATIVO');
@@ -408,8 +534,7 @@ export default function SeccaoFinanceira({
   }
 
   const getBiReport = (): BIClassRow[] => {
-    const classes = ["1", "2", "3", "4", "5", "6", "7", "8", "9"];
-    const classesLabels = ["1ª Classe", "2ª Classe", "3ª Classe", "4ª Classe", "5ª Classe", "6ª Classe", "7ª Classe", "8ª Classe", "9ª Classe"];
+    const availableClasses = getAvailableClasses();
     
     // Determine active school month index in Angola calendar
     const today = new Date();
@@ -422,9 +547,9 @@ export default function SeccaoFinanceira({
     }
     currentSchoolMonthIndex = Math.min(10, Math.max(0, currentSchoolMonthIndex));
 
-    return classes.map((clsName, idx) => {
-      const classRecords = financeRecords.filter(r => {
-        const norm = r.class.replace('ª', '').trim();
+    return availableClasses.map((clsName) => {
+      const classRecords = activeFinanceRecords.filter(r => {
+        const norm = cleanClassStr(r.class);
         return norm === clsName;
       });
 
@@ -474,7 +599,7 @@ export default function SeccaoFinanceira({
       const totalPrevisto = totalArrecadado + totalDivida + totalMultas;
 
       return {
-        className: classesLabels[idx],
+        className: `${clsName}ª Classe`,
         totalAlunos,
         totalArrecadado,
         totalDivida,
@@ -764,12 +889,12 @@ export default function SeccaoFinanceira({
     setTimeout(() => setSuccessAlert(null), 3000);
   };
 
-  // Global KPIs calculation
-  const totalArrecadado = financeRecords.reduce((acc, r) => acc + r.totalPago, 0);
-  const totalEmDivida = financeRecords.reduce((acc, r) => acc + r.totalDivida, 0);
+  // Global KPIs calculation (Hermetic to active subsystem)
+  const totalArrecadado = activeFinanceRecords.reduce((acc, r) => acc + r.totalPago, 0);
+  const totalEmDivida = activeFinanceRecords.reduce((acc, r) => acc + r.totalDivida, 0);
 
   // Filters application
-  const filteredRecords = financeRecords.filter(rec => {
+  const filteredRecords = activeFinanceRecords.filter(rec => {
     const matchesSearch = rec.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
                           rec.id.toUpperCase().includes(searchTerm.toUpperCase());
     const matchesClass = selectedClass === 'All' || rec.class === selectedClass;
@@ -793,7 +918,7 @@ export default function SeccaoFinanceira({
         <PainelAlertasChefia
           loggedInStaff={loggedInStaff}
           staffList={staffList}
-          financeRecords={financeRecords}
+          financeRecords={activeFinanceRecords}
         />
       )}
 
@@ -1163,7 +1288,7 @@ export default function SeccaoFinanceira({
               className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 cursor-pointer focus:outline-none focus:border-indigo-500 focus:bg-white"
             >
               <option value="All">Todas as Classes</option>
-              {Array.from(new Set(financeRecords.map(r => r.class))).sort().map(cls => (
+              {getAvailableClasses().map(cls => (
                 <option key={cls} value={cls}>{cls}ª Classe</option>
               ))}
             </select>
@@ -1176,7 +1301,7 @@ export default function SeccaoFinanceira({
               className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 cursor-pointer focus:outline-none focus:border-indigo-500 focus:bg-white"
             >
               <option value="All">Todas as Turmas</option>
-              {Array.from(new Set(financeRecords.map(r => r.section))).sort().map(sec => (
+              {Array.from(new Set(activeFinanceRecords.map(r => r.section))).sort().map(sec => (
                 <option key={sec} value={sec}>Turma {sec}</option>
               ))}
             </select>
@@ -1517,7 +1642,7 @@ export default function SeccaoFinanceira({
                   className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 cursor-pointer focus:outline-none focus:border-indigo-500 focus:bg-white"
                 >
                   <option value="All">Todas as Classes</option>
-                  {Array.from(new Set(financeRecords.map(r => r.class))).sort().map(cls => (
+                  {getAvailableClasses().map(cls => (
                     <option key={cls} value={cls}>{cls}ª Classe</option>
                   ))}
                 </select>
@@ -1530,7 +1655,7 @@ export default function SeccaoFinanceira({
                   className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 cursor-pointer focus:outline-none focus:border-indigo-500 focus:bg-white"
                 >
                   <option value="All">Todas as Turmas</option>
-                  {Array.from(new Set(financeRecords.map(r => r.section))).sort().map(sec => (
+                  {Array.from(new Set(activeFinanceRecords.map(r => r.section))).sort().map(sec => (
                     <option key={sec} value={sec}>Turma {sec}</option>
                   ))}
                 </select>
@@ -1547,7 +1672,7 @@ export default function SeccaoFinanceira({
               </h3>
               <span className="text-[10px] bg-slate-200 text-slate-750 font-bold px-2 py-0.5 rounded-full font-mono">
                 {
-                  financeRecords.filter(r => {
+                  activeFinanceRecords.filter(r => {
                     const matchesSearch = r.name.toLowerCase().includes(searchTerm.toLowerCase()) || r.id.toLowerCase().includes(searchTerm.toLowerCase());
                     const matchesClass = selectedClass === 'All' || r.class.replace('ª', '').trim() === selectedClass.replace('ª', '').trim();
                     const matchesSection = selectedSection === 'All' || r.section === selectedSection;
@@ -1571,7 +1696,7 @@ export default function SeccaoFinanceira({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
-                  {financeRecords.filter(r => {
+                  {activeFinanceRecords.filter(r => {
                     const matchesSearch = r.name.toLowerCase().includes(searchTerm.toLowerCase()) || r.id.toLowerCase().includes(searchTerm.toLowerCase());
                     const matchesClass = selectedClass === 'All' || r.class.replace('ª', '').trim() === selectedClass.replace('ª', '').trim();
                     const matchesSection = selectedSection === 'All' || r.section === selectedSection;
@@ -1688,6 +1813,106 @@ export default function SeccaoFinanceira({
       {/* SEÇÃO DE RELATÓRIOS TRIMESTRAIS OFICIAIS (SUBDIRECTOR ADMINISTRATIVO) */}
       {financeActiveSubTab === 'TRIMESTRAL' && (
         <div className="space-y-6 animate-fadeIn">
+          {/* SUBSYSTEM BANNER & TRIMESTER CONTROL PANEL (PERFIL DO SUBDIRECTOR ADMINISTRATIVO) */}
+          <div className="bg-white border border-slate-200 rounded-2xl p-5 space-y-4 shadow-2xs">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-slate-100 pb-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] uppercase font-black tracking-widest text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-md">
+                    Subsistema Activo no Ecossistema
+                  </span>
+                  <span className="text-[10px] uppercase font-bold text-slate-500 font-mono">
+                    ({activeSubsystem})
+                  </span>
+                </div>
+                <h3 className="text-sm font-extrabold text-slate-900 uppercase tracking-tight mt-1">
+                  {subsystemInfo.nomeOficial} ({subsystemInfo.abreviatura})
+                </h3>
+                <p className="text-xs text-slate-500 font-medium">
+                  Classes ativas: <strong className="text-slate-800">{getAvailableClasses().map(c => `${c}ª`).join(', ')}</strong>. Os subsistemas ocultos encontram-se rigorosamente excluídos de todos os relatórios e estatísticas.
+                </p>
+              </div>
+
+              <div className="shrink-0 text-left md:text-right">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                  Responsável Administrativo
+                </span>
+                <span className="text-xs font-black text-indigo-700 block font-heading">
+                  {subdirectorAdminName}
+                </span>
+              </div>
+            </div>
+
+            {/* ABERTURA / FECHO DE TRIMESTRES FINANCEIROS NO PERFIL DO SUBDIRECTOR ADMINISTRATIVO */}
+            <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-4 space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Lock className="w-4 h-4 text-indigo-600" />
+                  <h4 className="text-xs font-black text-slate-800 uppercase tracking-wider">
+                    Gestão de Estado dos Trimestres Financeiros (Abertura / Fecho)
+                  </h4>
+                </div>
+                <span className="text-[10px] font-bold text-indigo-800 bg-indigo-100/80 px-2 py-0.5 rounded-md">
+                  Controlo do Director Geral & Subdirector Administrativo
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {[
+                  { key: 'trimesterI_Status', label: 'Iº Trimestre', defaultStatus: 'ABERTO' },
+                  { key: 'trimesterII_Status', label: 'IIº Trimestre', defaultStatus: 'FECHADO' },
+                  { key: 'trimesterIII_Status', label: 'IIIº Trimestre', defaultStatus: 'FECHADO' }
+                ].map((t) => {
+                  const currentStatus = (schoolSettings as any)?.[t.key] || t.defaultStatus;
+                  const isOpen = currentStatus === 'ABERTO';
+                  const canManage = 
+                    loggedInStaff?.role === 'DIRECTOR_GERAL' || 
+                    loggedInStaff?.role === 'SUB_DIRECTOR_ADMINISTRATIVO' || 
+                    canEdit;
+
+                  return (
+                    <div key={t.key} className="bg-white p-3 rounded-xl border border-slate-200 shadow-2xs flex flex-col justify-between space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-black text-slate-800 uppercase">{t.label}</span>
+                        <span className={`text-[9px] font-mono font-bold uppercase px-2 py-0.5 rounded-md ${
+                          isOpen ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' : 'bg-rose-100 text-rose-800 border border-rose-300'
+                        }`}>
+                          {isOpen ? 'ABERTO' : 'FECHADO'}
+                        </span>
+                      </div>
+
+                      {canManage ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const newStatus = isOpen ? 'FECHADO' : 'ABERTO';
+                            const updated = {
+                              ...schoolSettings,
+                              [t.key]: newStatus
+                            };
+                            updateSchoolSettings(updated as any);
+                          }}
+                          className={`w-full py-1.5 px-3 rounded-lg text-[10px] font-extrabold uppercase tracking-wider text-center cursor-pointer transition-all flex items-center justify-center gap-1.5 ${
+                            isOpen
+                              ? 'bg-rose-600 hover:bg-rose-700 text-white shadow-xs'
+                              : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs'
+                          }`}
+                        >
+                          {isOpen ? <Lock className="w-3 h-3" /> : <CheckCircle className="w-3 h-3" />}
+                          <span>{isOpen ? 'Fechar Trimestre' : 'Abrir Trimestre'}</span>
+                        </button>
+                      ) : (
+                        <p className="text-[9.5px] text-slate-400 italic font-medium text-center">
+                          Reservado à Direcção / SDA
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
           {/* Header & Trimester Selector */}
           <div className="bg-white border border-slate-200 rounded-2xl p-5 flex flex-col md:flex-row items-center justify-between gap-4 shadow-2xs">
             <div className="space-y-1">
@@ -1741,7 +1966,7 @@ export default function SeccaoFinanceira({
 
               <button
                 type="button"
-                onClick={() => generateFinancialQuarterlyPDF(financeRecords, selectedTrimester, vMensal, vMulta, schoolSettings, subdirectorAdminName)}
+                onClick={() => generateFinancialQuarterlyPDF(selectedTrimesterRecords, selectedTrimester, vMensal, vMulta, schoolSettings, subdirectorAdminName)}
                 className="bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold px-4 py-2.5 rounded-xl text-xs uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer shadow-md shadow-indigo-600/10 shrink-0"
               >
                 <Printer className="w-4 h-4" />
@@ -1768,9 +1993,9 @@ export default function SeccaoFinanceira({
                   </thead>
                   <tbody className="divide-y divide-slate-100 font-medium">
                     {(() => {
-                      const classesList = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13"];
+                      const classesList = getAvailableClasses();
                       const summaries = classesList.map(cls => {
-                        const clsRecords = financeRecords.filter(r => r.class && r.class.toString().replace('ª', '').trim() === cls);
+                        const clsRecords = selectedTrimesterRecords.filter(r => r.class && cleanClassStr(r.class) === cls);
                         let arrec = 0;
                         let div = 0;
                         clsRecords.forEach(r => { arrec += r.totalPago; div += r.totalDivida; });
@@ -1785,7 +2010,7 @@ export default function SeccaoFinanceira({
                         return (
                           <tr>
                             <td colSpan={6} className="text-center py-6 text-slate-400 font-medium italic">
-                              Nenhuma turma cadastrada com alunos no sistema.
+                              Nenhuma turma cadastrada com alunos no sistema para este subsistema.
                             </td>
                           </tr>
                         );
@@ -1833,7 +2058,7 @@ export default function SeccaoFinanceira({
                   <div className="flex flex-wrap gap-1.5 pt-1">
                     {(() => {
                       const turmaMap = new Map<string, number>();
-                      financeRecords.forEach(r => {
+                      selectedTrimesterRecords.forEach(r => {
                         const key = `${r.class}ª Cl. - Turma ${r.section}`;
                         turmaMap.set(key, (turmaMap.get(key) || 0) + r.totalDivida);
                       });
@@ -1858,7 +2083,7 @@ export default function SeccaoFinanceira({
                   <div className="flex flex-wrap gap-1.5 pt-1">
                     {(() => {
                       const turmaMap = new Map<string, number>();
-                      financeRecords.forEach(r => {
+                      selectedTrimesterRecords.forEach(r => {
                         const key = `${r.class}ª Cl. - Turma ${r.section}`;
                         turmaMap.set(key, (turmaMap.get(key) || 0) + r.totalDivida);
                       });
@@ -1891,7 +2116,7 @@ export default function SeccaoFinanceira({
 
               <button
                 type="button"
-                onClick={() => generateAttendanceQuarterlyPDF(financeRecords, selectedTrimester, schoolSettings, subdirectorAdminName)}
+                onClick={() => generateAttendanceQuarterlyPDF(selectedTrimesterRecords, selectedTrimester, schoolSettings, subdirectorAdminName)}
                 className="bg-rose-600 hover:bg-rose-700 text-white font-extrabold px-4 py-2.5 rounded-xl text-xs uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer shadow-md shadow-rose-600/10 shrink-0"
               >
                 <Printer className="w-4 h-4" />
@@ -1904,21 +2129,21 @@ export default function SeccaoFinanceira({
               <div className="bg-rose-50/60 border border-rose-200 p-4 rounded-xl text-center">
                 <span className="text-[10px] font-black uppercase text-rose-500 font-mono tracking-widest block">Total Faltas Injustificadas</span>
                 <span className="text-2xl font-black text-rose-700 font-mono">
-                  {financeRecords.reduce((sum, r) => sum + (r.faltasInjustificadas || 0), 0)}
+                  {selectedTrimesterRecords.reduce((sum, r) => sum + (r.faltasInjustificadas || 0), 0)}
                 </span>
               </div>
 
               <div className="bg-emerald-50/60 border border-emerald-200 p-4 rounded-xl text-center">
                 <span className="text-[10px] font-black uppercase text-emerald-600 font-mono tracking-widest block">Total Faltas Justificadas</span>
                 <span className="text-2xl font-black text-emerald-700 font-mono">
-                  {financeRecords.reduce((sum, r) => sum + (r.faltasJustificadas || 0), 0)}
+                  {selectedTrimesterRecords.reduce((sum, r) => sum + (r.faltasJustificadas || 0), 0)}
                 </span>
               </div>
 
               <div className="bg-amber-50/60 border border-amber-200 p-4 rounded-xl text-center">
                 <span className="text-[10px] font-black uppercase text-amber-600 font-mono tracking-widest block">Alunos em Nível Crítico (≥10 Faltas)</span>
                 <span className="text-2xl font-black text-amber-800 font-mono">
-                  {financeRecords.filter(r => (r.faltasInjustificadas || 0) >= 10).length}
+                  {selectedTrimesterRecords.filter(r => (r.faltasInjustificadas || 0) >= 10).length}
                 </span>
               </div>
             </div>

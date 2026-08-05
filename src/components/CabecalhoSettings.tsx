@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { SchoolSettings, UserRole, carregarGrelhaCurricular, GrelhaCurricularItem, SubjectType, ModalityType, SUBJECTS } from '../types';
-import { Shield, Building, MapPin, Mail, Phone, User, Users, Save, CheckCircle, ShieldAlert, FileText, BookOpen, Image, RefreshCw, Upload, Sparkles, Trash2, X, Database, Wifi, WifiOff, Server, Plus, RotateCcw, ArrowLeft, Layers, ToggleLeft, ToggleRight, GripVertical, ArrowUp, ArrowDown } from 'lucide-react';
+import { Shield, Building, MapPin, Mail, Phone, User, Users, Save, CheckCircle, ShieldAlert, FileText, BookOpen, Image, RefreshCw, Upload, Sparkles, Trash2, X, Database, Wifi, WifiOff, Server, Plus, RotateCcw, ArrowLeft, Layers, ToggleLeft, ToggleRight, GripVertical, ArrowUp, ArrowDown, CheckCircle2, AlertCircle, XCircle, Loader2, ArrowUpRight, ArrowDownLeft } from 'lucide-react';
 import { ConfiguracaoSubsistema } from './ConfiguracaoSubsistema';
 import { formatarNomeProprio, formatarNomeDisciplina } from '../utils/pautaLogic';
 
@@ -13,8 +13,8 @@ interface CabecalhoSettingsProps {
   settings: SchoolSettings;
   onChangeSettings: (settings: SchoolSettings) => void;
   userRole: UserRole;
-  onPullData?: () => Promise<void>;
-  onPushData?: () => Promise<void>;
+  onPullData?: () => Promise<any>;
+  onPushData?: () => Promise<any>;
 }
 
 export default function CabecalhoSettings({
@@ -78,10 +78,19 @@ export default function CabecalhoSettings({
 
   // PostgreSQL Synchronization local states
   const [syncEnabled, setSyncEnabled] = useState(settings.syncEnabled || false);
-  const [syncServerUrl, setSyncServerUrl] = useState(settings.syncServerUrl || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000'));
+  const [syncServerUrl, setSyncServerUrl] = useState(settings.syncServerUrl && settings.syncServerUrl !== 'http://localhost:3000' ? settings.syncServerUrl : '');
   const [connStatus, setConnStatus] = useState<'idle' | 'testing' | 'success' | 'failed'>('idle');
   const [connMessage, setConnMessage] = useState<string | null>(null);
   const [syncLoading, setSyncLoading] = useState(false);
+  const [syncOpStatus, setSyncOpStatus] = useState<'idle' | 'pushing' | 'pulling' | 'success' | 'empty' | 'error'>('idle');
+  const [syncOpMessage, setSyncOpMessage] = useState<string | null>(null);
+  const [lastSyncStats, setLastSyncStats] = useState<{
+    studentsCount: number;
+    staffCount: number;
+    gradesCount: number;
+    propinasCount: number;
+    grelhaCount?: number;
+  } | null>(null);
 
   // Sub-selection state: EMOJI (símbolo) or IMAGE (ficheiro local)
   const [customLogoType, setCustomLogoType] = useState<'EMOJI' | 'IMAGE'>(
@@ -607,34 +616,67 @@ export default function CabecalhoSettings({
   };
 
   const testConnection = async () => {
+    let rawUrl = syncServerUrl.trim();
+    if (!rawUrl) {
+      setConnStatus('failed');
+      setConnMessage('Por favor, introduza o Endereço IP do Servidor SIGEP Backend (ex: http://192.168.44.119:3000) no campo acima antes de testar.');
+      return;
+    }
+
+    if (!/^https?:\/\//i.test(rawUrl)) {
+      rawUrl = 'http://' + rawUrl;
+    }
+    const targetUrl = rawUrl.replace(/\/$/, '');
+
     setConnStatus('testing');
-    setConnMessage('Tentando conectar ao servidor em ' + syncServerUrl + '...');
+    setConnMessage(`Tentando conectar ao servidor em ${targetUrl}...`);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 6000); // Timeout de 6 segundos
+
     try {
-      const res = await fetch(`${syncServerUrl}/api/health`, {
+      const res = await fetch(`${targetUrl}/api/health`, {
         method: 'GET',
         headers: { 'Accept': 'application/json' },
+        signal: controller.signal,
         mode: 'cors'
       });
+      clearTimeout(timeoutId);
       if (res.ok) {
         setConnStatus('success');
-        setConnMessage('Conectado com sucesso ao Servidor SIGEP Centralizado PostgreSQL! (Banco de Dados On-line)');
+        setConnMessage(`Conectado com sucesso ao Servidor SIGEP Backend (${targetUrl})! O banco de dados PostgreSQL está operacional.`);
       } else {
         throw new Error(`Código de resposta HTTP: ${res.status}`);
       }
     } catch (err: any) {
+      clearTimeout(timeoutId);
       setConnStatus('failed');
-      setConnMessage(`Falha na conexão: Certifique-se de que o servidor local está rodando na porta correta (Ex: 3001) e o IP/computador está acessível na sua rede. Erro: ${err.message}`);
+      if (err.name === 'AbortError') {
+        setConnMessage(`Tempo de conexão esgotado (Timeout de 6s) para ${targetUrl}. O servidor não respondeu. Verifique se o backend do SIGEP/PostgreSQL está em execução e se a porta 3000 está liberada no Firewall do Windows.`);
+      } else {
+        setConnMessage(`Falha na conexão com ${targetUrl}: Certifique-se de que o backend do SIGEP está ativo na mesma rede e se a porta 3000 está acessível. Erro: ${err.message}`);
+      }
     }
   };
 
   const handleLocalPush = async () => {
     if (!onPushData) return;
     setSyncLoading(true);
+    setSyncOpStatus('pushing');
+    setSyncOpMessage('A verificar e carregar todo o ecossistema SIGEP (Cadastros, Matrículas, Pautas, RH, Finanças, Propinas, Grelhas e Parâmetros) para o PostgreSQL central...');
+
     try {
-      await onPushData();
-      alert('Sincronização concluída com sucesso! Todos os dados locais foram ENVIADOS para o servidor PostgreSQL central.');
+      const stats = await onPushData();
+      setLastSyncStats(stats || null);
+      setSyncOpStatus('success');
+      setSyncOpMessage(
+        'Sincronização global do ecossistema SIGEP concluída em tempo real com sucesso! Todos os dados operacionais foram gravados no banco PostgreSQL central.'
+      );
     } catch (err: any) {
-      alert(`Erro na sincronização: ${err.message}`);
+      setSyncOpStatus('error');
+      setSyncOpMessage(
+        `Falha de comunicação com PostgreSQL: Não foi possível realizar o envio dos dados. Verifique se o servidor SIGEP Backend (${syncServerUrl || 'servidor local'}) e o PostgreSQL estão em execução e se a porta 3000 está liberada. Erro: ${err.message || 'Sem conexão com a base de dados.'}`
+      );
     } finally {
       setSyncLoading(false);
     }
@@ -642,15 +684,22 @@ export default function CabecalhoSettings({
 
   const handleLocalPull = async () => {
     if (!onPullData) return;
-    if (!confirm('Esta operação irá substituir todos os dados locais do seu navegador pelos dados centralizados do PostgreSQL. Deseja continuar?')) {
-      return;
-    }
     setSyncLoading(true);
+    setSyncOpStatus('pulling');
+    setSyncOpMessage('A importar todo o ecossistema SIGEP do PostgreSQL central (Cadastros, Matrículas, Pautas, RH, Finanças, Propinas, Grelhas e Parâmetros) para este computador...');
+
     try {
-      await onPullData();
-      alert('Importação concluída com sucesso! Os dados do servidor PostgreSQL foram puxados para o seu navegador.');
+      const stats = await onPullData();
+      setLastSyncStats(stats || null);
+      setSyncOpStatus('success');
+      setSyncOpMessage(
+        'Importação global do ecossistema SIGEP concluída em tempo real com sucesso! Os dados mais recentes do PostgreSQL central foram sincronizados localmente.'
+      );
     } catch (err: any) {
-      alert(`Erro ao puxar dados: ${err.message}`);
+      setSyncOpStatus('error');
+      setSyncOpMessage(
+        `Falha de comunicação com PostgreSQL: Não foi possível importar os dados do servidor. Verifique se o servidor SIGEP Backend (${syncServerUrl || 'servidor local'}) está ativo e acessível na rede. Erro: ${err.message || 'Sem resposta do servidor.'}`
+      );
     } finally {
       setSyncLoading(false);
     }
@@ -1529,15 +1578,29 @@ export default function CabecalhoSettings({
                     <div className="space-y-1.5">
                       <label className="text-[10px] font-extrabold text-slate-400 uppercase block">Endereço IP do Servidor SIGEP Backend</label>
                       <div className="flex gap-2">
-                        <input type="text" value={syncServerUrl} onChange={(e) => setSyncServerUrl(e.target.value)} className="px-3 py-2 text-xs border rounded-xl flex-1 text-slate-800 font-mono" />
-                        <button type="button" onClick={testConnection} className="px-4 py-2 text-xs font-bold text-indigo-700 bg-indigo-50 border rounded-xl flex items-center gap-1">
+                        <input
+                          type="text"
+                          value={syncServerUrl}
+                          onChange={(e) => setSyncServerUrl(e.target.value)}
+                          placeholder="introduza aqui o IP do seu PC ex. http://192.168.1.100:3000"
+                          className="px-3 py-2 text-xs border rounded-xl flex-1 text-slate-800 font-mono placeholder:text-slate-400 placeholder:font-sans"
+                        />
+                        <button type="button" onClick={testConnection} className="px-4 py-2 text-xs font-bold text-indigo-700 bg-indigo-50 border rounded-xl flex items-center gap-1 cursor-pointer hover:bg-indigo-100 transition-colors">
                           <RefreshCw className={`w-3.5 h-3.5 ${connStatus === 'testing' ? 'animate-spin' : ''}`} />
                           <span>Testar</span>
                         </button>
                       </div>
-                      <span className="text-[9px] text-slate-400 font-medium block mt-1">
-                        Servidor de Origem Detetado: <span className="font-mono text-indigo-650 font-bold">{typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000'}</span>
-                      </span>
+                      <div className="space-y-1.5 mt-1.5">
+                        <span className="text-[9.5px] text-indigo-600 font-semibold block">
+                          Exemplo de Formato: <span className="font-mono bg-indigo-50 px-1 py-0.5 rounded text-indigo-700">http://192.168.1.100:3000</span> (introduza o IP do seu PC ou servidor central)
+                        </span>
+                        <div className="p-2.5 bg-amber-50/90 border border-amber-200/90 rounded-xl flex items-start gap-2 leading-snug">
+                          <Database className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                          <span className="text-[10px] font-semibold text-amber-900">
+                            <strong>Atenção Relevante:</strong> É fundamental manter a <em>Sincronização com Base de Dados Centralizada (PostgreSQL)</em> bem configurada para assegurar que pautas, matrículas e dados financeiros sejam partilhados instantaneamente entre todos os computadores da instituição.
+                          </span>
+                        </div>
+                      </div>
                     </div>
 
                     {connStatus !== 'idle' && (
@@ -1546,13 +1609,140 @@ export default function CabecalhoSettings({
                       </div>
                     )}
 
-                    <div className="pt-4 border-t grid grid-cols-2 gap-4">
-                      <button type="button" disabled={syncLoading} onClick={handleLocalPush} className="py-2 bg-indigo-600 text-white font-semibold text-xs rounded-lg shadow-sm">
-                        Carregar Local ➡️ Postgres
-                      </button>
-                      <button type="button" disabled={syncLoading} onClick={handleLocalPull} className="py-2 bg-emerald-600 text-white font-semibold text-xs rounded-lg shadow-sm">
-                        Importar Postgres ➡️ Local
-                      </button>
+                    <div className="pt-4 border-t space-y-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <button
+                          type="button"
+                          disabled={syncLoading}
+                          onClick={handleLocalPush}
+                          className={`py-3 px-4 font-bold text-xs rounded-xl flex items-center justify-center gap-2 transition-all shadow-md cursor-pointer ${
+                            syncOpStatus === 'pushing'
+                              ? 'bg-indigo-800 text-white animate-pulse cursor-wait shadow-indigo-900/30'
+                              : 'bg-indigo-600 hover:bg-indigo-700 active:scale-[0.98] text-white shadow-indigo-600/20'
+                          } ${syncLoading && syncOpStatus !== 'pushing' ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        >
+                          {syncOpStatus === 'pushing' ? (
+                            <>
+                              <Loader2 className="w-4 h-4 animate-spin text-white" />
+                              <span>A Carregar... Aguarde</span>
+                            </>
+                          ) : (
+                            <>
+                              <ArrowUpRight className="w-4 h-4" />
+                              <span>Carregar Local ➔ Postgres</span>
+                            </>
+                          )}
+                        </button>
+
+                        <button
+                          type="button"
+                          disabled={syncLoading}
+                          onClick={handleLocalPull}
+                          className={`py-3 px-4 font-bold text-xs rounded-xl flex items-center justify-center gap-2 transition-all shadow-md cursor-pointer ${
+                            syncOpStatus === 'pulling'
+                              ? 'bg-emerald-800 text-white animate-pulse cursor-wait shadow-emerald-900/30'
+                              : 'bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white shadow-emerald-600/20'
+                          } ${syncLoading && syncOpStatus !== 'pulling' ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        >
+                          {syncOpStatus === 'pulling' ? (
+                            <>
+                              <Loader2 className="w-4 h-4 animate-spin text-white" />
+                              <span>A Importar... Aguarde</span>
+                            </>
+                          ) : (
+                            <>
+                              <ArrowDownLeft className="w-4 h-4" />
+                              <span>Importar Postgres ➔ Local</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+
+                      {/* Caixa de Notificação de Progresso e Resultado */}
+                      {syncOpStatus === 'pushing' && (
+                        <div className="p-4 bg-indigo-50/90 border border-indigo-200 rounded-xl flex items-center gap-3">
+                          <Loader2 className="w-5 h-5 text-indigo-600 animate-spin shrink-0" />
+                          <div className="space-y-0.5">
+                            <p className="text-xs font-bold text-indigo-950 uppercase tracking-wider">A Carregar Dados Locais para PostgreSQL...</p>
+                            <p className="text-[11px] text-indigo-800 font-medium leading-relaxed">
+                              {syncOpMessage}
+                            </p>
+                          </div>
+                        </div>
+                      )}
+
+                      {syncOpStatus === 'pulling' && (
+                        <div className="p-4 bg-emerald-50/90 border border-emerald-200 rounded-xl flex items-center gap-3">
+                          <Loader2 className="w-5 h-5 text-emerald-600 animate-spin shrink-0" />
+                          <div className="space-y-0.5">
+                            <p className="text-xs font-bold text-emerald-950 uppercase tracking-wider">A Importar do PostgreSQL para Local...</p>
+                            <p className="text-[11px] text-emerald-800 font-medium leading-relaxed">
+                              {syncOpMessage}
+                            </p>
+                          </div>
+                        </div>
+                      )}
+
+                      {syncOpStatus === 'success' && (
+                        <div className="p-4 bg-emerald-50 border border-emerald-300 rounded-xl space-y-3">
+                          <div className="flex items-start gap-3">
+                            <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                            <div className="space-y-0.5">
+                              <p className="text-xs font-extrabold text-emerald-950 uppercase tracking-wider">Sincronização Global Realizada com Sucesso!</p>
+                              <p className="text-[11px] text-emerald-800 font-medium leading-relaxed">{syncOpMessage}</p>
+                            </div>
+                          </div>
+
+                          {lastSyncStats && (
+                            <div className="pt-2 border-t border-emerald-200/80 grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
+                              <div className="bg-white/80 p-2.5 rounded-lg border border-emerald-200 flex items-center justify-between">
+                                <span className="font-semibold text-slate-700">🎓 Cadastros, Matrículas & Transferências:</span>
+                                <span className="font-extrabold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-md">{lastSyncStats.studentsCount} alunos</span>
+                              </div>
+                              <div className="bg-white/80 p-2.5 rounded-lg border border-emerald-200 flex items-center justify-between">
+                                <span className="font-semibold text-slate-700">📊 Pautas, Mini-Pautas & Avaliações:</span>
+                                <span className="font-extrabold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-md">{lastSyncStats.gradesCount} lançamentos</span>
+                              </div>
+                              <div className="bg-white/80 p-2.5 rounded-lg border border-emerald-200 flex items-center justify-between">
+                                <span className="font-semibold text-slate-700">👥 Recursos Humanos & Corpo Docente:</span>
+                                <span className="font-extrabold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-md">{lastSyncStats.staffCount} funcionários</span>
+                              </div>
+                              <div className="bg-white/80 p-2.5 rounded-lg border border-emerald-200 flex items-center justify-between">
+                                <span className="font-semibold text-slate-700">💳 Finanças, Recibos & Propinas:</span>
+                                <span className="font-extrabold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-md">{lastSyncStats.propinasCount} registros</span>
+                              </div>
+                              <div className="bg-white/80 p-2.5 rounded-lg border border-emerald-200 flex items-center justify-between">
+                                <span className="font-semibold text-slate-700">📚 Grelhas Curriculares & Matrizes:</span>
+                                <span className="font-extrabold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-md">{lastSyncStats.grelhaCount || 0} disciplinas</span>
+                              </div>
+                              <div className="bg-white/80 p-2.5 rounded-lg border border-emerald-200 flex items-center justify-between">
+                                <span className="font-semibold text-slate-700">⚙️ Parâmetros & Configurações Escolares:</span>
+                                <span className="font-extrabold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-md">Ativo & Sincronizado</span>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {syncOpStatus === 'empty' && (
+                        <div className="p-4 bg-amber-50 border border-amber-300 rounded-xl flex items-start gap-3">
+                          <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                          <div className="space-y-0.5">
+                            <p className="text-xs font-extrabold text-amber-950 uppercase tracking-wider">Sem Registros para Processar</p>
+                            <p className="text-[11px] text-amber-800 font-medium leading-relaxed">{syncOpMessage}</p>
+                          </div>
+                        </div>
+                      )}
+
+                      {syncOpStatus === 'error' && (
+                        <div className="p-4 bg-rose-50 border border-rose-300 rounded-xl flex items-start gap-3">
+                          <XCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                          <div className="space-y-0.5">
+                            <p className="text-xs font-extrabold text-rose-950 uppercase tracking-wider">Falha na Comunicação com PostgreSQL</p>
+                            <p className="text-[11px] text-rose-800 font-medium leading-relaxed">{syncOpMessage}</p>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>

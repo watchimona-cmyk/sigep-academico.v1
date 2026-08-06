@@ -378,7 +378,7 @@ export default function CicloVidaAluno({
       const specialtyText = c.level === 'PRIMARIO' ? 'Ensino Primário' : `Mágisterio / ${c.specialty || 'N/A'}`;
       doc.text(specialtyText, 135, currentY + 5);
       
-      const scoreText = c.level === 'PRIMARIO' ? 'Apto (Doc)' : (c.media !== undefined ? String(c.media.toFixed(2)) : 'N/A');
+      const scoreText = c.level === 'PRIMARIO' ? 'Apto (Doc)' : (typeof c.media === 'number' && !isNaN(c.media) ? String(c.media.toFixed(2)) : 'N/A');
       doc.text(scoreText, 178, currentY + 5);
       
       doc.setDrawColor(226, 232, 240);
@@ -1362,7 +1362,7 @@ function SecundarioGradesForm({ candidate, onSave }: SecundarioGradesFormProps) 
           />
         </div>
 
-        {candidate.media !== undefined && (
+        {typeof candidate.media === 'number' && !isNaN(candidate.media) && (
           <div className="text-center bg-slate-100 px-2 py-1 rounded">
             <span className="text-[8px] font-bold text-slate-400 block uppercase">Média</span>
             <span className="text-[10px] font-black text-slate-800">{candidate.media.toFixed(2)}</span>

@@ -112,7 +112,7 @@ export default function Student360Modal({ student, grades, onClose }: Student360
           <div className="text-center md:text-right bg-white/5 px-4 py-3 rounded-xl border border-white/10 shrink-0">
             <div className="text-[10px] font-bold text-indigo-300 uppercase tracking-widest font-mono">Média Geral</div>
             <div className={`text-2xl font-black font-mono mt-0.5 ${isApproved ? 'text-emerald-400' : 'text-rose-400'}`}>
-              {averageGrade.toFixed(1)} / {classNum >= 10 ? '20' : '10'}
+              {(typeof averageGrade === 'number' && !isNaN(averageGrade) ? averageGrade : 0).toFixed(1)} / {classNum >= 10 ? '20' : '10'}
             </div>
             <div className="text-[9px] font-extrabold uppercase text-slate-400 mt-0.5 font-mono">
               Status Pedagógico: {isApproved ? 'Aprovado' : 'Reprovado'}
@@ -292,9 +292,9 @@ export default function Student360Modal({ student, grades, onClose }: Student360
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {studentGrades.map((g, index) => {
-                      const mac = g.mac || 0;
-                      const npt = g.npt || 0;
-                      const mt = g.mt !== null ? g.mt : Math.round((mac + npt) / 2 * 10) / 10;
+                      const mac = typeof g.mac === 'number' ? g.mac : 0;
+                      const npt = typeof g.npt === 'number' ? g.npt : 0;
+                      const mt = typeof g.mt === 'number' && !isNaN(g.mt) ? g.mt : Math.round((mac + npt) / 2 * 10) / 10;
                       const isSubjPass = mt >= passThreshold;
 
                       return (

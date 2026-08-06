@@ -175,10 +175,19 @@ export default function PainelMiniPautas({
   };
 
   const isTrimesterSequenceBlocked = (trimester: 'I' | 'II' | 'III') => {
-    const trimIStatus = schoolSettings?.trimesterI_Status || 'ABERTO';
-    const trimIIStatus = schoolSettings?.trimesterII_Status || 'FECHADO';
-    if (trimester === 'II' && trimIStatus === 'ABERTO') return true;
-    if (trimester === 'III' && trimIIStatus === 'ABERTO') return true;
+    if (trimester === 'I') return false;
+    if (trimester === 'II') {
+      // Se o Director Geral abriu explicitamente o IIº Trimestre, não está bloqueado!
+      if (schoolSettings?.trimesterII_Status === 'ABERTO') return false;
+      const trimIStatus = schoolSettings?.trimesterI_Status || 'ABERTO';
+      return trimIStatus === 'ABERTO';
+    }
+    if (trimester === 'III') {
+      // Se o Director Geral abriu explicitamente o IIIº Trimestre, não está bloqueado!
+      if (schoolSettings?.trimesterIII_Status === 'ABERTO') return false;
+      const trimIIStatus = schoolSettings?.trimesterII_Status || 'FECHADO';
+      return trimIIStatus === 'ABERTO';
+    }
     return false;
   };
 
@@ -684,6 +693,10 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
       mt: newMt
     });
 
+    setModalMac(parsedMac !== null ? String(parsedMac) : '');
+    setModalNpp(parsedNpp !== null ? String(parsedNpp) : '');
+    setModalNpt(parsedNpt !== null ? String(parsedNpt) : '');
+
     // Auto-lock immediately:
     handleRemoveTemporaryUnlock(modalStudent.id, selectedSubjectForLaunch, localTrimester);
 
@@ -1026,11 +1039,15 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
   };
 
   const getGradeRow = (studentId: string) => {
-    return grades.find(g => g.studentId === studentId && g.subject === localSubject && g.trimester === localTrimester) || {
-      mac: null,
-      npp: null,
-      npt: null,
-      mt: null
+    const found = grades.find(g => g.studentId === studentId && g.subject === localSubject && g.trimester === localTrimester);
+    if (!found) {
+      return { mac: null, npp: null, npt: null, mt: null };
+    }
+    return {
+      mac: typeof found.mac === 'number' && !isNaN(found.mac) ? found.mac : null,
+      npp: typeof found.npp === 'number' && !isNaN(found.npp) ? found.npp : null,
+      npt: typeof found.npt === 'number' && !isNaN(found.npt) ? found.npt : null,
+      mt: typeof found.mt === 'number' && !isNaN(found.mt) ? found.mt : null
     };
   };
 
@@ -1193,7 +1210,7 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
 
       if (!isBlankMode) {
         // MAC
-        if (row.mac !== null) {
+        if (typeof row.mac === 'number' && !isNaN(row.mac)) {
           if (row.mac < passScore) doc.setTextColor(220, 38, 38);
           doc.text(row.mac.toFixed(1), macCenter, currentY + 4.3, { align: 'center' });
           doc.setTextColor(30, 30, 30);
@@ -1203,7 +1220,7 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
 
         // NPP
         if (useNpp) {
-          if (row.npp !== null && row.npp !== undefined) {
+          if (typeof row.npp === 'number' && !isNaN(row.npp)) {
             if (row.npp < passScore) doc.setTextColor(220, 38, 38);
             doc.text(row.npp.toFixed(1), nppCenter, currentY + 4.3, { align: 'center' });
             doc.setTextColor(30, 30, 30);
@@ -1213,7 +1230,7 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
         }
 
         // NPT
-        if (row.npt !== null) {
+        if (typeof row.npt === 'number' && !isNaN(row.npt)) {
           if (row.npt < passScore) doc.setTextColor(220, 38, 38);
           doc.text(row.npt.toFixed(1), nptCenter, currentY + 4.3, { align: 'center' });
           doc.setTextColor(30, 30, 30);
@@ -1222,7 +1239,7 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
         }
 
         // MT
-        if (row.mt !== null) {
+        if (typeof row.mt === 'number' && !isNaN(row.mt)) {
           doc.setFont('Helvetica', 'bold');
           if (row.mt < passScore) doc.setTextColor(220, 38, 38);
           doc.text(row.mt.toFixed(1), mtCenter, currentY + 4.3, { align: 'center' });
@@ -1790,6 +1807,7 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
                         {/* MAC edit input */}
                         <td className="p-3 bg-indigo-50/10 text-center">
                           <input
+                            key={`${student.id}_mac_${macValue}`}
                             type="text"
                             defaultValue={macValue}
                             disabled={isClosingPeriod && !forceEditByDir}
@@ -1807,6 +1825,7 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
                         {useNpp && (
                           <td className="p-3 bg-indigo-50/10 text-center">
                             <input
+                              key={`${student.id}_npp_${nppValue}`}
                               type="text"
                               defaultValue={nppValue}
                               disabled={isClosingPeriod && !forceEditByDir}
@@ -1824,6 +1843,7 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
                         {/* NPT edit input */}
                         <td className="p-3 bg-indigo-50/10 text-center">
                           <input
+                            key={`${student.id}_npt_${nptValue}`}
                             type="text"
                             defaultValue={nptValue}
                             disabled={isClosingPeriod && !forceEditByDir}
@@ -1839,7 +1859,7 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
 
                         {/* calculated MT view */}
                         <td className="p-3.5 bg-indigo-50/30 text-center">
-                          {row.mt !== null ? (
+                          {typeof row.mt === 'number' && !isNaN(row.mt) ? (
                             <span className={`text-sm font-black font-mono ${
                               row.mt >= passScore ? 'text-indigo-650' : 'text-rose-500'
                             }`}>

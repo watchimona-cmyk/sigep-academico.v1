@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Staff, StaffRole, SubjectType, getSubjectsForClass, carregarGrelhaCurricular, getSpecialtyFullName } from '../types';
+import { Staff, StaffRole, SubjectType, ModalityType, getSubjectsForClass, carregarGrelhaCurricular, getSpecialtyFullName } from '../types';
 import { formatarNomeProprio } from '../utils/pautaLogic';
 import { 
   Users, 
@@ -216,6 +216,13 @@ export default function RecursosHumanos({
   const [selectedClasses, setSelectedClasses] = useState<string[]>([]);
   const [selectedSections, setSelectedSections] = useState<string[]>([]);
   const [selectedSubjects, setSelectedSubjects] = useState<SubjectType[]>([]);
+  const [accumulatedAssignments, setAccumulatedAssignments] = useState<{ class: string; section: string; subject: string; specialty?: string }[]>([]);
+  
+  // Custom states for assignment wizard / modal
+  const [wizardClass, setWizardClass] = useState<string>('');
+  const [wizardSubject, setWizardSubject] = useState<string>('');
+  const [wizardSection, setWizardSection] = useState<string>('');
+  const [isAssignmentWizardOpen, setIsAssignmentWizardOpen] = useState<boolean>(false);
 
   // Rótulos simples para subsistema de ensino conforme requisito
   const getModalityLabel = (mod: string) => {
@@ -378,6 +385,21 @@ export default function RecursosHumanos({
       setSelectedSpecialty(staff.specialty);
     }
     setNewPassword(staff.password || '12345');
+
+    // Popular Atribuições Acumuladas
+    if (staff.assignments && staff.assignments.length > 0) {
+      setAccumulatedAssignments(staff.assignments);
+    } else {
+      const rebuilt: { class: string; section: string; subject: string; specialty?: string }[] = [];
+      (staff.classes || []).forEach(c => {
+        (staff.sections || []).forEach(sec => {
+          (staff.subjects || []).forEach(sub => {
+            rebuilt.push({ class: c, section: sec, subject: sub, specialty: staff.specialty });
+          });
+        });
+      });
+      setAccumulatedAssignments(rebuilt);
+    }
     
     // Popular campos adicionais de RH realista
     setNewGabinete(staff.gabinete || '');
@@ -522,17 +544,32 @@ export default function RecursosHumanos({
     }
 
     const isProf = newRole === 'PROFESSOR';
-    if (isProf && selectedClasses.length === 0) {
-      setFormError('Por favor seleccione pelo menos uma Classe de docência para o Professor.');
-      return;
-    }
-    if (isProf && selectedSections.length === 0) {
-      setFormError('Por favor seleccione pelo menos uma Turma para o Professor.');
-      return;
-    }
-    if (isProf && selectedSubjects.length === 0) {
-      setFormError('Por favor seleccione pelo menos uma Disciplina curricular para o Professor.');
-      return;
+    if (isProf) {
+      const finalAssignments = accumulatedAssignments.length > 0 ? accumulatedAssignments : [];
+      if (finalAssignments.length === 0 && (selectedClasses.length === 0 || selectedSections.length === 0 || selectedSubjects.length === 0)) {
+        setFormError('Por favor adicione pelo menos uma Atribuição Curricular (Classe + Turma + Disciplina) para o Professor.');
+        return;
+      }
+
+      // Validação de Conflitos de Docência (Conflict Check)
+      for (const ass of finalAssignments) {
+        const conflictProf = staffList.find(s => {
+          if (s.id === editingStaffId || s.id === candidateId || s.role !== 'PROFESSOR') return false;
+          
+          const sAss = s.assignments || [];
+          if (sAss.length > 0) {
+            return sAss.some(a => a.class === ass.class && a.section === ass.section && a.subject === ass.subject);
+          }
+          return (s.classes || []).includes(ass.class) && (s.sections || []).includes(ass.section) && (s.subjects || []).includes(ass.subject as any);
+        });
+
+        if (conflictProf) {
+          const errMsg = `Conflito: A Disciplina "${ass.subject}" na ${ass.class}ª Classe Turma ${ass.section} já está atribuída ao Professor ${conflictProf.name} (ID: ${conflictProf.id}).`;
+          setFormError(errMsg);
+          window.alert(errMsg);
+          return;
+        }
+      }
     }
 
     // 1. Pop-up de Confirmação Obrigatória
@@ -549,6 +586,7 @@ export default function RecursosHumanos({
       classes: isProf ? selectedClasses : undefined,
       sections: isProf ? selectedSections : undefined,
       subjects: isProf ? selectedSubjects : undefined,
+      assignments: isProf ? accumulatedAssignments : undefined,
       specialty: isProf ? selectedSpecialty : undefined,
       password: finalPassword,
       
@@ -1167,17 +1205,17 @@ export default function RecursosHumanos({
               <div className="text-xs font-black text-slate-800 uppercase flex items-center justify-between border-b border-slate-200 pb-3">
                 <div className="flex items-center gap-1.5">
                   <BookOpen className="w-4 h-4 text-indigo-600" />
-                  <span>Atribuições Curriculares (Classes, Turmas e Disciplinas)</span>
+                  <span>Atribuição Curricular Inteligente (Classe + Turma + Disciplina)</span>
                 </div>
                 <span className="text-[10px] text-slate-500 font-normal normal-case">
-                  Navegue entre especialidades e classes para acumular as turmas e disciplinas lecionadas.
+                  Acumule múltiplas disciplinas e turmas com verificação automática de duplicidade e conflitos.
                 </span>
               </div>
 
               {/* 1. Subsistema Activo & Seleção de Especialidade (Ramo) */}
               <div className="p-4 bg-white rounded-xl border border-slate-200/80 space-y-4 shadow-3xs">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* Subsistema / Modalidade (Prevalece a configuração activa do SIGEP) */}
+                  {/* Subsistema / Modalidade */}
                   <div>
                     <label className="block text-xs font-extrabold text-slate-700 mb-1.5">
                       1.1 Subsistema de Ensino Activo *
@@ -1202,10 +1240,7 @@ export default function RecursosHumanos({
                     ) : formModality === 'PUNIV' ? (
                       <select
                         value={selectedSpecialty}
-                        onChange={(e) => {
-                          setSelectedSpecialty(e.target.value);
-                          // Não limpa selectedSections ou selectedSubjects, preservando o acumulado!
-                        }}
+                        onChange={(e) => setSelectedSpecialty(e.target.value)}
                         className="w-full bg-indigo-50/40 border border-indigo-200 rounded-xl px-3.5 py-2.5 text-xs font-bold text-indigo-950 focus:outline-hidden focus:border-indigo-500 cursor-pointer"
                       >
                         <option value="CFB">CFB - Ciências Físicas e Biológicas</option>
@@ -1216,10 +1251,7 @@ export default function RecursosHumanos({
                     ) : (
                       <select
                         value={selectedSpecialty}
-                        onChange={(e) => {
-                          setSelectedSpecialty(e.target.value);
-                          // Não limpa selectedSections ou selectedSubjects, preservando o acumulado!
-                        }}
+                        onChange={(e) => setSelectedSpecialty(e.target.value)}
                         className="w-full bg-indigo-50/40 border border-indigo-200 rounded-xl px-3.5 py-2.5 text-xs font-bold text-indigo-950 focus:outline-hidden focus:border-indigo-500 cursor-pointer"
                       >
                         <option value="MF">MF - Matemática e Física</option>
@@ -1238,150 +1270,184 @@ export default function RecursosHumanos({
                 </div>
               </div>
 
-              {/* Resumo em tempo real do acumulado validado */}
-              <div className="p-3.5 bg-indigo-50/70 border border-indigo-150 rounded-xl space-y-2 text-xs">
-                <div className="font-extrabold text-indigo-950 flex items-center justify-between">
-                  <span className="flex items-center gap-1.5 text-xs">
+              {/* LISTA DE ATRIBUIÇÕES ACUMULADAS */}
+              <div className="bg-white rounded-xl border border-indigo-100 p-4 space-y-3 shadow-2xs">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                  <div className="flex items-center gap-2">
                     <CheckCircle className="w-4 h-4 text-emerald-600" />
-                    <span>Resumo das Atribuições Acumuladas até ao momento:</span>
-                  </span>
-                  {(selectedClasses.length > 0 || selectedSections.length > 0 || selectedSubjects.length > 0) && (
+                    <span className="text-xs font-black uppercase text-slate-800">
+                      Atribuições Acumuladas deste Docente ({accumulatedAssignments.length})
+                    </span>
+                  </div>
+                  {accumulatedAssignments.length > 0 && (
                     <button
                       type="button"
                       onClick={() => {
+                        setAccumulatedAssignments([]);
                         setSelectedClasses([]);
                         setSelectedSections([]);
                         setSelectedSubjects([]);
                       }}
                       className="text-[10px] font-bold text-rose-600 hover:underline cursor-pointer"
                     >
-                      Limpar seleções
+                      Esvaziar Lista
                     </button>
                   )}
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px] pt-1">
-                  <div className="bg-white p-2 rounded-lg border border-indigo-100">
-                    <span className="text-slate-400 block font-bold text-[10px] uppercase">Classes ({selectedClasses.length}):</span>
-                    <span className="text-slate-900 font-extrabold">
-                      {selectedClasses.length > 0 ? selectedClasses.map(c => `${c}ª`).join(', ') : 'Nenhuma classe'}
-                    </span>
-                  </div>
-                  <div className="bg-white p-2 rounded-lg border border-indigo-100">
-                    <span className="text-slate-400 block font-bold text-[10px] uppercase">Turmas ({selectedSections.length}):</span>
-                    <span className="text-emerald-700 font-extrabold">
-                      {selectedSections.length > 0 ? selectedSections.join(', ') : 'Nenhuma turma'}
-                    </span>
-                  </div>
-                  <div className="bg-white p-2 rounded-lg border border-indigo-100">
-                    <span className="text-slate-400 block font-bold text-[10px] uppercase">Disciplinas ({selectedSubjects.length}):</span>
-                    <span className="text-indigo-900 font-extrabold">
-                      {selectedSubjects.length > 0 ? selectedSubjects.join(', ') : 'Nenhuma disciplina'}
-                    </span>
-                  </div>
-                </div>
-              </div>
 
-              {/* 2. Classes e Turmas Selection Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                
-                {/* 2. Classes Selection */}
-                <div className="space-y-2 bg-white p-4 rounded-xl border border-slate-200/80 shadow-3xs">
-                  <span className="block text-xs font-extrabold text-slate-700">2. Seleccione a(s) Classe(s) Lecionada(s)</span>
-                  <div className="flex flex-wrap gap-2 pt-1">
-                    {classesList.map(cls => {
-                      const isActive = selectedClasses.includes(cls);
-                      return (
-                        <button
-                          key={cls}
-                          type="button"
-                          onClick={() => handleClassToggle(cls)}
-                          className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                            isActive 
-                              ? 'bg-indigo-600 text-white shadow-xs' 
-                              : 'bg-slate-50 text-slate-700 border border-slate-200 hover:bg-slate-100'
-                          }`}
-                        >
-                          {cls}ª Classe
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* 3. Sections Selection Adaptadas à Especialidade */}
-                <div className="space-y-2 bg-white p-4 rounded-xl border border-slate-200/80 shadow-3xs">
-                  <div className="flex items-center justify-between">
-                    <span className="block text-xs font-extrabold text-slate-700">3. Seleccione a(s) Turma(s) Atribuída(s)</span>
-                    <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-100 font-mono">
-                      {selectedSpecialty ? `Especialidade: ${selectedSpecialty}` : 'Turmas Gerais'}
-                    </span>
-                  </div>
-                  <p className="text-[10px] text-slate-400">
-                    *As turmas adaptam-se dinamicamente ao ramo / especialidade selecionado.
-                  </p>
-                  <div className="flex flex-wrap gap-2 pt-1">
-                    {sectionsList.map(sec => {
-                      const isActive = selectedSections.includes(sec);
-                      return (
-                        <button
-                          key={sec}
-                          type="button"
-                          onClick={() => handleSectionToggle(sec)}
-                          className={`px-3 py-2 rounded-xl text-xs font-bold flex items-center justify-center transition-all cursor-pointer ${
-                            isActive 
-                              ? 'bg-emerald-600 text-white shadow-xs' 
-                              : 'bg-slate-50 text-slate-700 border border-slate-200 hover:bg-slate-100'
-                          }`}
-                        >
-                          {sec}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-              </div>
-
-              {/* 4. Disciplinas do Professor */}
-              <div className="space-y-2.5 pt-2 bg-white p-4 rounded-xl border border-slate-200/80 shadow-3xs">
-                <div className="flex items-center justify-between">
-                  <span className="block text-xs font-extrabold text-slate-700">
-                    4. Seleccione as Disciplinas Atribuídas (Filtradas para a Classe e Especialidade)
-                  </span>
-                  <span className="text-[10px] font-bold text-indigo-700 bg-indigo-50 px-2.5 py-0.5 rounded-full border border-indigo-100 font-mono">
-                    {availableSubjects.length} Disciplina(s)
-                  </span>
-                </div>
-                <p className="text-[10px] text-slate-400">
-                  *As opções abaixo mudam automaticamente conforme a matriz curricular oficial de {getSpecialtyFullName(selectedSpecialty)}.
-                </p>
-
-                {availableSubjects.length > 0 ? (
-                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5 pt-1">
-                    {availableSubjects.map(subj => {
-                      const isActive = selectedSubjects.includes(subj);
-                      return (
-                        <button
-                          key={subj}
-                          type="button"
-                          onClick={() => handleSubjectToggle(subj)}
-                          className={`p-2.5 rounded-xl text-left text-xs font-semibold flex items-center gap-2.5 transition-all cursor-pointer ${
-                            isActive
-                              ? 'bg-indigo-50 border-2 border-indigo-500 text-indigo-900 font-bold'
-                              : 'bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700'
-                          }`}
-                        >
-                          <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${isActive ? 'bg-indigo-600' : 'bg-slate-300'}`}></span>
-                          <span className="truncate">{subj}</span>
-                        </button>
-                      );
-                    })}
+                {accumulatedAssignments.length === 0 ? (
+                  <div className="p-4 bg-slate-50 border border-dashed border-slate-200 rounded-xl text-center space-y-1">
+                    <p className="text-xs font-bold text-slate-600">Nenhuma atribuição acumulada para este professor.</p>
+                    <p className="text-[10px] text-slate-400">Utilize o seletor em passos abaixo para adicionar combinações de Classe, Turma e Disciplina.</p>
                   </div>
                 ) : (
-                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs font-semibold text-amber-800">
-                    Nenhuma disciplina disponível para os filtros atuais. Por favor escolha pelo menos uma Classe acima.
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead>
+                        <tr className="bg-slate-100/80 text-slate-600 font-extrabold border-b border-slate-200 text-[10px] uppercase">
+                          <th className="p-2.5">Classe</th>
+                          <th className="p-2.5">Turma</th>
+                          <th className="p-2.5">Disciplina</th>
+                          <th className="p-2.5">Especialidade</th>
+                          <th className="p-2.5 text-right">Ação</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {accumulatedAssignments.map((ass, idx) => (
+                          <tr key={idx} className="hover:bg-indigo-50/30 transition-colors">
+                            <td className="p-2.5 font-black text-indigo-900">{ass.class}ª Classe</td>
+                            <td className="p-2.5 font-bold text-emerald-700">Turma {ass.section}</td>
+                            <td className="p-2.5 font-extrabold text-slate-800">{ass.subject}</td>
+                            <td className="p-2.5 font-semibold text-slate-500">{ass.specialty || selectedSpecialty || 'GERAL'}</td>
+                            <td className="p-2.5 text-right">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const updated = accumulatedAssignments.filter((_, i) => i !== idx);
+                                  setAccumulatedAssignments(updated);
+                                  setSelectedClasses(Array.from(new Set(updated.map(a => a.class))));
+                                  setSelectedSections(Array.from(new Set(updated.map(a => a.section))));
+                                  setSelectedSubjects(Array.from(new Set(updated.map(a => a.subject))) as SubjectType[]);
+                                }}
+                                className="p-1 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                                title="Remover Atribuição"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
                 )}
+              </div>
+
+              {/* PAINEL SELETOR EM PASSOS PARA ADICIONAR NOVA ATRIBUIÇÃO */}
+              <div className="p-4 bg-indigo-50/50 rounded-xl border border-indigo-200 space-y-4">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-extrabold uppercase text-indigo-950 flex items-center gap-1.5">
+                    <Plus className="w-4 h-4 text-indigo-600" />
+                    <span>Adicionar Nova Atribuição Curricular (Passo a Passo)</span>
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  {/* Passo 1: Classe */}
+                  <div>
+                    <label className="block text-[11px] font-extrabold text-slate-700 mb-1">
+                      Passo 1: Selecionar Classe *
+                    </label>
+                    <select
+                      value={wizardClass}
+                      onChange={(e) => {
+                        setWizardClass(e.target.value);
+                        setWizardSubject('');
+                      }}
+                      className="w-full bg-white border border-slate-300 rounded-xl p-2 text-xs font-bold text-slate-800 focus:border-indigo-500 cursor-pointer"
+                    >
+                      <option value="">-- Selecione a Classe --</option>
+                      {classesList.map(c => (
+                        <option key={c} value={c}>{c}ª Classe</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Passo 2: Disciplina */}
+                  <div>
+                    <label className="block text-[11px] font-extrabold text-slate-700 mb-1">
+                      Passo 2: Selecionar Disciplina *
+                    </label>
+                    <select
+                      value={wizardSubject}
+                      onChange={(e) => setWizardSubject(e.target.value)}
+                      disabled={!wizardClass}
+                      className="w-full bg-white border border-slate-300 rounded-xl p-2 text-xs font-bold text-slate-800 focus:border-indigo-500 disabled:opacity-50 cursor-pointer"
+                    >
+                      <option value="">-- Selecione a Disciplina --</option>
+                      {(wizardClass ? getSubjectsForClass(wizardClass, selectedSpecialty as ModalityType) : []).map(s => (
+                        <option key={s} value={s}>{s}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Passo 3: Turma */}
+                  <div>
+                    <label className="block text-[11px] font-extrabold text-slate-700 mb-1">
+                      Passo 3: Selecionar Turma *
+                    </label>
+                    <select
+                      value={wizardSection}
+                      onChange={(e) => setWizardSection(e.target.value)}
+                      className="w-full bg-white border border-slate-300 rounded-xl p-2 text-xs font-bold text-slate-800 focus:border-indigo-500 cursor-pointer"
+                    >
+                      <option value="">-- Selecione a Turma --</option>
+                      {sectionsList.map(sec => (
+                        <option key={sec} value={sec}>Turma {sec}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Passo 4: Botão Adicionar */}
+                <div className="flex justify-end pt-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!wizardClass || !wizardSubject || !wizardSection) {
+                        alert('Por favor selecione a Classe, a Disciplina e a Turma para adicionar.');
+                        return;
+                      }
+
+                      // Verificar duplicidade local
+                      const exists = accumulatedAssignments.some(
+                        a => a.class === wizardClass && a.section === wizardSection && a.subject === wizardSubject
+                      );
+                      if (exists) {
+                        alert(`A atribuição (${wizardClass}ª Classe / Turma ${wizardSection} / ${wizardSubject}) já consta da lista deste professor.`);
+                        return;
+                      }
+
+                      const updated = [
+                        ...accumulatedAssignments,
+                        { class: wizardClass, section: wizardSection, subject: wizardSubject, specialty: selectedSpecialty }
+                      ];
+
+                      setAccumulatedAssignments(updated);
+                      setSelectedClasses(Array.from(new Set(updated.map(a => a.class))));
+                      setSelectedSections(Array.from(new Set(updated.map(a => a.section))));
+                      setSelectedSubjects(Array.from(new Set(updated.map(a => a.subject))) as SubjectType[]);
+
+                      // Limpar seletores do wizard para permitira rápida adição sequencial
+                      setWizardSubject('');
+                    }}
+                    disabled={!wizardClass || !wizardSubject || !wizardSection}
+                    className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-extrabold cursor-pointer transition-all disabled:opacity-40 flex items-center gap-1.5 shadow-xs"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>Adicionar à Lista de Atribuições</span>
+                  </button>
+                </div>
               </div>
 
             </div>

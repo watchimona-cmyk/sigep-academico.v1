@@ -38,14 +38,21 @@ export interface AlunoPauta {
 export function calcularObservacaoPauta(
   aluno: AlunoPauta, 
   tipoClasse: TipoClasse, 
-  limiteDesistencia: number = 0.3
+  limiteDesistencia: number = 0.8
 ): 'Transita' | 'N/Transita' | 'Apto' | 'N/Apto' | 'Desistente' {
+  if (!aluno || !Array.isArray(aluno.disciplinas) || aluno.disciplinas.length === 0) {
+    return tipoClasse === 'CONTINUA' ? 'N/Transita' : 'N/Apto';
+  }
+
   let totalCampos = 0;
   let camposVazios = 0;
 
-  // 1. Contabilizar total de campos de notas esperados (MAC, NPP, NPT, MT) e total de campos vazios
+  // 1. Contabilizar total de campos de notas esperados e total de campos vazios
   for (const disc of aluno.disciplinas) {
-    const campos = [disc.mac, disc.npp, disc.npt, disc.mt];
+    const campos = [disc.mac, disc.npt, disc.mt];
+    if (disc.npp !== undefined) {
+      campos.push(disc.npp);
+    }
     totalCampos += campos.length;
     for (const val of campos) {
       if (val === null || val === undefined) {
@@ -54,7 +61,7 @@ export function calcularObservacaoPauta(
     }
   }
 
-  // 2. Critério de Desistência: Se o volume de campos vazios/nulos for >= limite (padrão 30%)
+  // 2. Critério de Desistência: Se o volume de campos vazios/nulos for >= limite (padrão 80% sem notas)
   if (totalCampos > 0) {
     const percentagemVazios = camposVazios / totalCampos;
     if (percentagemVazios >= limiteDesistencia) {
@@ -62,10 +69,10 @@ export function calcularObservacaoPauta(
     }
   }
 
-  // 3. Se tiver campos vazios mas for inferior ao limite de desistência, mantém a retenção
+  // 3. Se tiver campos vazios essenciais (MAC, NPT ou MT), mantém a retenção temporária
   let temCamposVazios = false;
   for (const disc of aluno.disciplinas) {
-    if (disc.mac === null || disc.npp === null || disc.npt === null || disc.mt === null) {
+    if (disc.mac === null || disc.npt === null || disc.mt === null) {
       temCamposVazios = true;
       break;
     }

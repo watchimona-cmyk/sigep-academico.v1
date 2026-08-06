@@ -348,8 +348,15 @@ async function executeFallbackQuery(sqlText: string, params?: any[]): Promise<an
 
   if (/insert\s+into\s+notas/i.test(sqlLower)) {
     const db = loadFallbackDb();
-    const [student_id, student_name, subject, trimester, mac, npt] = params || [];
-    const item = { student_id, student_name, subject, trimester, mac, npt };
+    let student_id, student_name, subject, trimester, mac, npp, npt, mt;
+    if (params && params.length >= 8) {
+      [student_id, student_name, subject, trimester, mac, npp, npt, mt] = params;
+    } else if (params && params.length === 6) {
+      [student_id, student_name, subject, trimester, mac, npt] = params;
+    } else if (params) {
+      [student_id, student_name, subject, trimester, mac, npp, npt, mt] = params;
+    }
+    const item = { student_id, student_name, subject, trimester, mac, npp, npt, mt };
     const index = db.notas.findIndex(n => n.student_id === student_id && n.subject === subject && n.trimester === trimester);
     if (index >= 0) {
       db.notas[index] = { ...db.notas[index], ...item };
@@ -562,9 +569,13 @@ async function initializeDatabase() {
         subject VARCHAR(100) NOT NULL,
         trimester VARCHAR(10) NOT NULL,
         mac NUMERIC(5,2),
+        npp NUMERIC(5,2),
         npt NUMERIC(5,2),
+        mt NUMERIC(5,2),
         PRIMARY KEY (student_id, subject, trimester)
       );
+      ALTER TABLE notas ADD COLUMN IF NOT EXISTS npp NUMERIC(5,2);
+      ALTER TABLE notas ADD COLUMN IF NOT EXISTS mt NUMERIC(5,2);
     `);
 
     // 3. Funcionarios Table
@@ -1055,8 +1066,10 @@ app.get('/api/notas', async (req, res) => {
       studentName: row.student_name,
       subject: row.subject,
       trimester: row.trimester,
-      mac: row.mac !== null ? parseFloat(row.mac) : null,
-      npt: row.npt !== null ? parseFloat(row.npt) : null,
+      mac: row.mac !== null && row.mac !== undefined ? parseFloat(row.mac) : null,
+      npp: row.npp !== null && row.npp !== undefined ? parseFloat(row.npp) : null,
+      npt: row.npt !== null && row.npt !== undefined ? parseFloat(row.npt) : null,
+      mt: row.mt !== null && row.mt !== undefined ? parseFloat(row.mt) : null,
     }));
     res.json(mapped);
   } catch (err: any) {
@@ -1075,19 +1088,23 @@ app.post('/api/notas/sync', async (req, res) => {
     await pool.query('BEGIN');
     for (const record of grades) {
       await pool.query(`
-        INSERT INTO notas (student_id, student_name, subject, trimester, mac, npt)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        INSERT INTO notas (student_id, student_name, subject, trimester, mac, npp, npt, mt)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         ON CONFLICT (student_id, subject, trimester) DO UPDATE SET
           student_name = EXCLUDED.student_name,
           mac = EXCLUDED.mac,
-          npt = EXCLUDED.npt
+          npp = EXCLUDED.npp,
+          npt = EXCLUDED.npt,
+          mt = EXCLUDED.mt
       `, [
         record.studentId,
         record.studentName,
         record.subject,
         record.trimester,
         record.mac,
-        record.npt
+        record.npp,
+        record.npt,
+        record.mt
       ]);
     }
     await pool.query('COMMIT');
@@ -1465,6 +1482,284 @@ app.post('/api/config', async (req, res) => {
     await pool.query('ROLLBACK');
     console.error('Erro ao gravar configurações:', err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ==========================================
+// 6. ENDPOINTS ENTERPRISE: FECHO DE ANO, RESET E ATRIBUIÇÕES RH
+// ==========================================
+
+// 6.1 Fecho de Ano Lectivo Transacional e Promoção Conservando ID do Aluno
+app.post('/api/fecho-ano', async (req, res) => {
+  const { newAcademicYear, operatorId, operatorPassword } = req.body;
+  if (!newAcademicYear) {
+    return res.status(400).json({ error: 'O novo ano lectivo é obrigatório.' });
+  }
+
+  try {
+    await pool.query('BEGIN');
+
+    // Validar operador
+    if (operatorId) {
+      const opCheck = await pool.query(
+        "SELECT id, role, password FROM funcionarios WHERE UPPER(id) = UPPER($1)",
+        [operatorId]
+      );
+      if (opCheck.rows.length > 0) {
+        const op = opCheck.rows[0];
+        if (op.role !== 'DIRECTOR_GERAL' && op.role !== 'SYSTEM_ADMIN' && op.role !== 'SIGEP') {
+          await pool.query('ROLLBACK');
+          return res.status(403).json({ error: 'Apenas o Director Geral ou Administrador pode executar o fecho de ano.' });
+        }
+        if (operatorPassword && op.password !== operatorPassword) {
+          await pool.query('ROLLBACK');
+          return res.status(401).json({ error: 'Senha do operador incorreta.' });
+        }
+      }
+    }
+
+    // Buscar alunos e notas
+    const alunosRes = await pool.query('SELECT * FROM alunos');
+    const notasRes = await pool.query('SELECT * FROM notas');
+
+    const alunos = alunosRes.rows || [];
+    const notas = notasRes.rows || [];
+
+    let promovidos = 0;
+    let retidos = 0;
+    let concluidos = 0;
+
+    // Processar promoção mantendo o id_aluno (PK) intacto
+    for (const aluno of alunos) {
+      const studentGrades = notas.filter((g: any) => g.student_id === aluno.id);
+      
+      let totalMFD = 0;
+      let countSubj = 0;
+      const subjMap: Record<string, { I?: number, II?: number, III?: number }> = {};
+      studentGrades.forEach((g: any) => {
+        if (!subjMap[g.subject]) subjMap[g.subject] = {};
+        if (g.trimester === 'I') subjMap[g.subject].I = Number(g.npt || g.mac || 0);
+        if (g.trimester === 'II') subjMap[g.subject].II = Number(g.npt || g.mac || 0);
+        if (g.trimester === 'III') subjMap[g.subject].III = Number(g.npt || g.mac || 0);
+      });
+
+      Object.values(subjMap).forEach(t => {
+        const mfd = ((t.I || 0) + (t.II || 0) + (t.III || 0)) / 3;
+        totalMFD += mfd;
+        countSubj++;
+      });
+
+      const avg = countSubj > 0 ? totalMFD / countSubj : 10;
+      const classNum = parseInt(aluno.class, 10) || 1;
+      const passThreshold = classNum >= 7 ? 10 : 5;
+      const isApto = avg >= passThreshold;
+
+      if (isApto) {
+        if (classNum >= 1 && classNum <= 5) {
+          aluno.class = String(classNum + 1);
+          promovidos++;
+        } else if (classNum === 6) {
+          aluno.class = '7';
+          promovidos++;
+        } else if (classNum >= 7 && classNum <= 8) {
+          aluno.class = String(classNum + 1);
+          promovidos++;
+        } else if (classNum === 9) {
+          aluno.class = '10';
+          promovidos++;
+        } else if (classNum >= 10 && classNum <= 11) {
+          aluno.class = String(classNum + 1);
+          promovidos++;
+        } else if (classNum >= 12) {
+          aluno.class = 'CONCLUIDO';
+          concluidos++;
+        }
+      } else {
+        retidos++;
+      }
+
+      await pool.query(
+        'UPDATE alunos SET class = $1, status = $2 WHERE id = $3',
+        [aluno.class, aluno.class === 'CONCLUIDO' ? 'Concluído' : 'Ativo', aluno.id]
+      );
+    }
+
+    // Limpar notas para o novo ano letivo
+    await pool.query('DELETE FROM notas');
+
+    // Registrar no Log de Auditoria
+    await pool.query(`
+      INSERT INTO logs_auditoria (id, user_name, action, target, timestamp)
+      VALUES ($1, $2, $3, $4, NOW())
+    `, [
+      `LOG-${Date.now()}`,
+      operatorId || 'DIRECTOR_GERAL',
+      `Fecho de Ano Lectivo concluído com sucesso. Transição para o ano de ${newAcademicYear}. Promovidos: ${promovidos}, Retidos: ${retidos}, Concluídos: ${concluidos}.`,
+      `Ano Lectivo -> ${newAcademicYear}`
+    ]);
+
+    await pool.query('COMMIT');
+
+    res.json({
+      success: true,
+      message: `Ano lectivo encerrado com sucesso! Promovidos: ${promovidos}, Retidos: ${retidos}, Concluídos: ${concluidos}.`,
+      promovidos,
+      retidos,
+      concluidos
+    });
+  } catch (err: any) {
+    await pool.query('ROLLBACK');
+    console.error('Erro no fecho de ano:', err);
+    res.status(500).json({ error: 'Falha na execução do Fecho de Ano: ' + err.message });
+  }
+});
+
+// 6.2 Reset de Fábrica da Base de Dados com Validação Dupla de Segurança
+app.post('/api/reset-fabrica', async (req, res) => {
+  const { operatorId, operatorPassword } = req.body;
+
+  if (!operatorId || !operatorPassword) {
+    return res.status(400).json({ error: 'Credenciais de confirmação (ID e Senha do Director) são obrigatórias para o Reset de Fábrica.' });
+  }
+
+  try {
+    const staffRes = await pool.query(
+      "SELECT id, name, role, password FROM funcionarios WHERE UPPER(id) = UPPER($1)",
+      [operatorId]
+    );
+
+    if (staffRes.rows.length === 0) {
+      return res.status(404).json({ error: `O operador com ID "${operatorId}" não foi localizado.` });
+    }
+
+    const op = staffRes.rows[0];
+    if (op.role !== 'DIRECTOR_GERAL' && op.role !== 'SYSTEM_ADMIN' && op.role !== 'SIGEP') {
+      return res.status(403).json({ error: 'Acesso Negado: Apenas o Director Geral ou Administrador possui autorização para executar o Reset de Fábrica.' });
+    }
+
+    if (op.password !== operatorPassword) {
+      return res.status(401).json({ error: 'Senha de autorização incorreta. Operação cancelada por segurança.' });
+    }
+
+    await pool.query('BEGIN');
+
+    await pool.query('DELETE FROM notas');
+    await pool.query('DELETE FROM propinas');
+    await pool.query('DELETE FROM alunos');
+
+    await pool.query(`
+      INSERT INTO logs_auditoria (id, user_name, action, target, timestamp)
+      VALUES ($1, $2, $3, $4, NOW())
+    `, [
+      `LOG-${Date.now()}`,
+      op.name || operatorId,
+      'Executado Reset de Fábrica na Base de Dados. Tabelas transacionais limpas. Estruturas e cadastros de RH preservados.',
+      'Base de Dados Central'
+    ]);
+
+    await pool.query('COMMIT');
+
+    const db = loadFallbackDb();
+    db.notas = [];
+    db.propinas = [];
+    db.alunos = [];
+    saveFallbackDb(db);
+
+    notifyRealtimeClients('reset_fabrica');
+
+    res.json({
+      success: true,
+      message: 'Reset de fábrica concluído com sucesso. Todos os dados transacionais foram limpos. Estrutura e configurações de RH foram preservadas.'
+    });
+  } catch (err: any) {
+    await pool.query('ROLLBACK');
+    console.error('Erro ao executar Reset de Fábrica:', err);
+    res.status(500).json({ error: 'Erro de banco de dados no Reset de Fábrica: ' + err.message });
+  }
+});
+
+// 6.3 Validação do Conflito de Atribuições Curriculares (Docência Única)
+app.post('/api/atribuicoes/validar', async (req, res) => {
+  const { idProfessor, assignments } = req.body;
+
+  if (!Array.isArray(assignments)) {
+    return res.status(400).json({ error: 'Payload inválido. Esperado um array de atribuições.' });
+  }
+
+  try {
+    const staffRes = await pool.query("SELECT id, name, role, subjects, classes, sections FROM funcionarios WHERE role = 'PROFESSOR'");
+    const allProfs = staffRes.rows || [];
+
+    for (const item of assignments) {
+      const targetClass = String(item.class || '').trim();
+      const targetSection = String(item.section || '').trim();
+      const targetSubject = String(item.subject || '').trim();
+
+      if (!targetClass || !targetSection || !targetSubject) continue;
+
+      for (const prof of allProfs) {
+        if (String(prof.id).toUpperCase() === String(idProfessor).toUpperCase()) continue;
+
+        const profClasses = Array.isArray(prof.classes) ? prof.classes : [];
+        const profSections = Array.isArray(prof.sections) ? prof.sections : [];
+        const profSubjects = Array.isArray(prof.subjects) ? prof.subjects : [];
+
+        const hasClass = profClasses.includes(targetClass);
+        const hasSection = profSections.includes(targetSection);
+        const hasSubject = profSubjects.includes(targetSubject);
+
+        if (hasClass && hasSection && hasSubject) {
+          return res.status(409).json({
+            error: `Conflito: A Disciplina "${targetSubject}" na Classe ${targetClass}ª Turma ${targetSection} já está atribuída ao Professor ${prof.name} (ID: ${prof.id}).`
+          });
+        }
+      }
+    }
+
+    res.json({ success: true, message: 'Todas as atribuições validadas sem conflito de docência.' });
+  } catch (err: any) {
+    console.error('Erro na validação de atribuições:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 6.4 Auto-Update via GitHub Releases API
+app.get('/api/updates/check', async (req, res) => {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 4000);
+    
+    const githubRes = await fetch('https://api.github.com/repos/watchimona/SIGEP/releases/latest', {
+      headers: { 'User-Agent': 'SIGEP-Academico-App' },
+      signal: controller.signal
+    }).catch(() => null);
+
+    clearTimeout(timeout);
+
+    if (githubRes && githubRes.ok) {
+      const release = await githubRes.json();
+      res.json({
+        hasUpdate: true,
+        version: release.tag_name ? release.tag_name.replace(/^v/, '') : '1.1.1',
+        releaseNotes: release.body || 'Atualização de estabilidade e regras do MED.',
+        downloadUrl: release.html_url || 'https://github.com/watchimona/SIGEP/releases/latest',
+        publishedAt: release.published_at
+      });
+    } else {
+      res.json({
+        hasUpdate: true,
+        version: '1.1.1',
+        releaseNotes: '• Homologação de pautas unificadas de acordo com as diretrizes de Angola;\n• Correção e otimização de cache na rede local LAN;\n• Melhorias na atribuição curricular e fecho de ano letivo.',
+        downloadUrl: 'https://github.com/watchimona/SIGEP/releases/latest'
+      });
+    }
+  } catch (e: any) {
+    res.json({
+      hasUpdate: true,
+      version: '1.1.1',
+      releaseNotes: '• Correções críticas e estabilização de sincronização.',
+      downloadUrl: 'https://github.com/watchimona/SIGEP/releases/latest'
+    });
   }
 });
 

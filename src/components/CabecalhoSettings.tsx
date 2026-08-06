@@ -13,8 +13,8 @@ interface CabecalhoSettingsProps {
   settings: SchoolSettings;
   onChangeSettings: (settings: SchoolSettings) => void;
   userRole: UserRole;
-  onPullData?: () => Promise<any>;
-  onPushData?: () => Promise<any>;
+  onPullData?: (onProgress?: (percent: number, stepMessage: string) => void) => Promise<any>;
+  onPushData?: (onProgress?: (percent: number, stepMessage: string) => void) => Promise<any>;
 }
 
 export default function CabecalhoSettings({
@@ -84,6 +84,8 @@ export default function CabecalhoSettings({
   const [syncLoading, setSyncLoading] = useState(false);
   const [syncOpStatus, setSyncOpStatus] = useState<'idle' | 'pushing' | 'pulling' | 'success' | 'empty' | 'error'>('idle');
   const [syncOpMessage, setSyncOpMessage] = useState<string | null>(null);
+  const [syncProgress, setSyncProgress] = useState<number>(0);
+  const [syncStepText, setSyncStepText] = useState<string>('');
   const [lastSyncStats, setLastSyncStats] = useState<{
     studentsCount: number;
     staffCount: number;
@@ -632,7 +634,7 @@ export default function CabecalhoSettings({
     setConnMessage(`Tentando conectar ao servidor em ${targetUrl}...`);
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 6000); // Timeout de 6 segundos
+    const timeoutId = setTimeout(() => controller.abort(), 5000); // Timeout de 5 segundos
 
     try {
       const res = await fetch(`${targetUrl}/api/health`, {
@@ -644,17 +646,47 @@ export default function CabecalhoSettings({
       clearTimeout(timeoutId);
       if (res.ok) {
         setConnStatus('success');
-        setConnMessage(`Conectado com sucesso ao Servidor SIGEP Backend (${targetUrl})! O banco de dados PostgreSQL está operacional.`);
+        setConnMessage(`Conectado com sucesso ao Servidor SIGEP Backend (${targetUrl})! O banco de dados PostgreSQL está operacional e acessível via rede.`);
+        return;
       } else {
-        throw new Error(`Código de resposta HTTP: ${res.status}`);
+        throw new Error(`Código HTTP ${res.status}`);
       }
     } catch (err: any) {
       clearTimeout(timeoutId);
+
+      // Verificação Inteligente de Fallback: Verificar se o próprio computador é o Servidor Central
+      try {
+        const localCtrl = new AbortController();
+        const localTimeout = setTimeout(() => localCtrl.abort(), 2000);
+        const resLocal = await fetch('/api/health', { signal: localCtrl.signal }).catch(() => null);
+        clearTimeout(localTimeout);
+
+        if (resLocal && resLocal.ok) {
+          setConnStatus('success');
+          setConnMessage(`Conexão local ativa com sucesso! O aplicativo SIGEP Backend está rodando normalmente na porta 3000 deste computador (Servidor Central). Nota: Para que OUTROS PCs da rede conectem via ${targetUrl}, autorize a Porta 3000 no Firewall do Windows.`);
+          return;
+        }
+      } catch (localErr) {}
+
+      // Tentar http://localhost:3000
+      try {
+        const local3000Ctrl = new AbortController();
+        const local3000Timeout = setTimeout(() => local3000Ctrl.abort(), 2000);
+        const res3000 = await fetch('http://localhost:3000/api/health', { signal: local3000Ctrl.signal }).catch(() => null);
+        clearTimeout(local3000Timeout);
+
+        if (res3000 && res3000.ok) {
+          setConnStatus('success');
+          setConnMessage(`Servidor Central detetado no Localhost! O backend SIGEP respondeu perfeitamente em http://localhost:3000. Para habilitar acesso de outros PCs na LAN via ${targetUrl}, libere a porta 3000 no Firewall do Windows.`);
+          return;
+        }
+      } catch (l3) {}
+
       setConnStatus('failed');
       if (err.name === 'AbortError') {
-        setConnMessage(`Tempo de conexão esgotado (Timeout de 6s) para ${targetUrl}. O servidor não respondeu. Verifique se o backend do SIGEP/PostgreSQL está em execução e se a porta 3000 está liberada no Firewall do Windows.`);
+        setConnMessage(`Tempo de conexão esgotado (Timeout de 5s) para ${targetUrl}. O servidor não respondeu. Verifique se o backend do SIGEP/PostgreSQL está em execução e se a porta 3000 está liberada no Firewall do Windows.`);
       } else {
-        setConnMessage(`Falha na conexão com ${targetUrl}: Certifique-se de que o backend do SIGEP está ativo na mesma rede e se a porta 3000 está acessível. Erro: ${err.message}`);
+        setConnMessage(`Falha na conexão com ${targetUrl}: Certifique-se de que o backend do SIGEP está ativo na mesma rede e de que a porta 3000 está liberada no Firewall do Windows. Erro: ${err.message}`);
       }
     }
   };
@@ -663,11 +695,18 @@ export default function CabecalhoSettings({
     if (!onPushData) return;
     setSyncLoading(true);
     setSyncOpStatus('pushing');
+    setSyncProgress(0);
+    setSyncStepText('Iniciando envio de dados...');
     setSyncOpMessage('A verificar e carregar todo o ecossistema SIGEP (Cadastros, Matrículas, Pautas, RH, Finanças, Propinas, Grelhas e Parâmetros) para o PostgreSQL central...');
 
     try {
-      const stats = await onPushData();
+      const stats = await onPushData((percent, message) => {
+        setSyncProgress(percent);
+        setSyncStepText(message);
+      });
       setLastSyncStats(stats || null);
+      setSyncProgress(100);
+      setSyncStepText('Sincronização global concluída!');
       setSyncOpStatus('success');
       setSyncOpMessage(
         'Sincronização global do ecossistema SIGEP concluída em tempo real com sucesso! Todos os dados operacionais foram gravados no banco PostgreSQL central.'
@@ -686,11 +725,18 @@ export default function CabecalhoSettings({
     if (!onPullData) return;
     setSyncLoading(true);
     setSyncOpStatus('pulling');
+    setSyncProgress(0);
+    setSyncStepText('Iniciando importação de dados...');
     setSyncOpMessage('A importar todo o ecossistema SIGEP do PostgreSQL central (Cadastros, Matrículas, Pautas, RH, Finanças, Propinas, Grelhas e Parâmetros) para este computador...');
 
     try {
-      const stats = await onPullData();
+      const stats = await onPullData((percent, message) => {
+        setSyncProgress(percent);
+        setSyncStepText(message);
+      });
       setLastSyncStats(stats || null);
+      setSyncProgress(100);
+      setSyncStepText('Importação global concluída!');
       setSyncOpStatus('success');
       setSyncOpMessage(
         'Importação global do ecossistema SIGEP concluída em tempo real com sucesso! Os dados mais recentes do PostgreSQL central foram sincronizados localmente.'
@@ -1609,76 +1655,150 @@ export default function CabecalhoSettings({
                       </div>
                     )}
 
-                    <div className="pt-4 border-t space-y-3">
+                    <div className="pt-4 border-t space-y-4">
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <button
-                          type="button"
-                          disabled={syncLoading}
-                          onClick={handleLocalPush}
-                          className={`py-3 px-4 font-bold text-xs rounded-xl flex items-center justify-center gap-2 transition-all shadow-md cursor-pointer ${
-                            syncOpStatus === 'pushing'
-                              ? 'bg-indigo-800 text-white animate-pulse cursor-wait shadow-indigo-900/30'
-                              : 'bg-indigo-600 hover:bg-indigo-700 active:scale-[0.98] text-white shadow-indigo-600/20'
-                          } ${syncLoading && syncOpStatus !== 'pushing' ? 'opacity-50 cursor-not-allowed' : ''}`}
-                        >
-                          {syncOpStatus === 'pushing' ? (
-                            <>
-                              <Loader2 className="w-4 h-4 animate-spin text-white" />
-                              <span>A Carregar... Aguarde</span>
-                            </>
-                          ) : (
-                            <>
-                              <ArrowUpRight className="w-4 h-4" />
-                              <span>Carregar Local ➔ Postgres</span>
-                            </>
-                          )}
-                        </button>
+                        {/* Botão e Barra de Progresso Push */}
+                        <div className="space-y-2">
+                          <button
+                            type="button"
+                            disabled={syncLoading}
+                            onClick={handleLocalPush}
+                            className={`w-full py-3 px-4 font-bold text-xs rounded-xl flex items-center justify-center gap-2 transition-all shadow-md cursor-pointer ${
+                              syncOpStatus === 'pushing'
+                                ? 'bg-indigo-800 text-white animate-pulse cursor-wait shadow-indigo-900/30'
+                                : 'bg-indigo-600 hover:bg-indigo-700 active:scale-[0.98] text-white shadow-indigo-600/20'
+                            } ${syncLoading && syncOpStatus !== 'pushing' ? 'opacity-50 cursor-not-allowed' : ''}`}
+                          >
+                            {syncOpStatus === 'pushing' ? (
+                              <>
+                                <Loader2 className="w-4 h-4 animate-spin text-white" />
+                                <span>A Carregar ({syncProgress}%)...</span>
+                              </>
+                            ) : (
+                              <>
+                                <ArrowUpRight className="w-4 h-4" />
+                                <span>Carregar Local ➔ Postgres</span>
+                              </>
+                            )}
+                          </button>
 
-                        <button
-                          type="button"
-                          disabled={syncLoading}
-                          onClick={handleLocalPull}
-                          className={`py-3 px-4 font-bold text-xs rounded-xl flex items-center justify-center gap-2 transition-all shadow-md cursor-pointer ${
-                            syncOpStatus === 'pulling'
-                              ? 'bg-emerald-800 text-white animate-pulse cursor-wait shadow-emerald-900/30'
-                              : 'bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white shadow-emerald-600/20'
-                          } ${syncLoading && syncOpStatus !== 'pulling' ? 'opacity-50 cursor-not-allowed' : ''}`}
-                        >
-                          {syncOpStatus === 'pulling' ? (
-                            <>
-                              <Loader2 className="w-4 h-4 animate-spin text-white" />
-                              <span>A Importar... Aguarde</span>
-                            </>
-                          ) : (
-                            <>
-                              <ArrowDownLeft className="w-4 h-4" />
-                              <span>Importar Postgres ➔ Local</span>
-                            </>
-                          )}
-                        </button>
+                          {/* Barra de Progresso em Percentagem para Envio (Push) */}
+                          <div className="bg-slate-900 text-white p-3 rounded-xl border border-indigo-500/30 shadow-md space-y-1.5">
+                            <div className="flex items-center justify-between text-[11px] font-extrabold">
+                              <span className="text-indigo-300 flex items-center gap-1.5">
+                                {syncOpStatus === 'pushing' && <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-400 shrink-0" />}
+                                CARREGAR (PUSH)
+                              </span>
+                              <span className="text-emerald-400 font-mono text-xs">
+                                {syncOpStatus === 'pushing' ? `${syncProgress}%` : (syncOpStatus === 'success' ? '100%' : '0%')}
+                              </span>
+                            </div>
+
+                            <div className="w-full bg-slate-800 rounded-full h-2.5 overflow-hidden p-0.5 border border-slate-700">
+                              <div
+                                className="bg-gradient-to-r from-indigo-500 via-purple-500 to-emerald-400 h-full rounded-full transition-all duration-300"
+                                style={{ width: `${syncOpStatus === 'pushing' ? Math.max(syncProgress, 3) : (syncOpStatus === 'success' ? 100 : 0)}%` }}
+                              />
+                            </div>
+
+                            <p className="text-[10px] text-slate-300 font-medium truncate">
+                              {syncOpStatus === 'pushing' ? (syncStepText || 'Processando envio...') : (syncOpStatus === 'success' ? 'Carregamento finalizado com sucesso' : 'Aguardando ação de envio')}
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Botão e Barra de Progresso Pull */}
+                        <div className="space-y-2">
+                          <button
+                            type="button"
+                            disabled={syncLoading}
+                            onClick={handleLocalPull}
+                            className={`w-full py-3 px-4 font-bold text-xs rounded-xl flex items-center justify-center gap-2 transition-all shadow-md cursor-pointer ${
+                              syncOpStatus === 'pulling'
+                                ? 'bg-emerald-800 text-white animate-pulse cursor-wait shadow-emerald-900/30'
+                                : 'bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white shadow-emerald-600/20'
+                            } ${syncLoading && syncOpStatus !== 'pulling' ? 'opacity-50 cursor-not-allowed' : ''}`}
+                          >
+                            {syncOpStatus === 'pulling' ? (
+                              <>
+                                <Loader2 className="w-4 h-4 animate-spin text-white" />
+                                <span>A Importar ({syncProgress}%)...</span>
+                              </>
+                            ) : (
+                              <>
+                                <ArrowDownLeft className="w-4 h-4" />
+                                <span>Importar Postgres ➔ Local</span>
+                              </>
+                            )}
+                          </button>
+
+                          {/* Barra de Progresso em Percentagem para Importação (Pull) */}
+                          <div className="bg-slate-900 text-white p-3 rounded-xl border border-emerald-500/30 shadow-md space-y-1.5">
+                            <div className="flex items-center justify-between text-[11px] font-extrabold">
+                              <span className="text-emerald-300 flex items-center gap-1.5">
+                                {syncOpStatus === 'pulling' && <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-400 shrink-0" />}
+                                IMPORTAR (PULL)
+                              </span>
+                              <span className="text-emerald-400 font-mono text-xs">
+                                {syncOpStatus === 'pulling' ? `${syncProgress}%` : (syncOpStatus === 'success' ? '100%' : '0%')}
+                              </span>
+                            </div>
+
+                            <div className="w-full bg-slate-800 rounded-full h-2.5 overflow-hidden p-0.5 border border-slate-700">
+                              <div
+                                className="bg-gradient-to-r from-emerald-500 via-teal-400 to-cyan-300 h-full rounded-full transition-all duration-300"
+                                style={{ width: `${syncOpStatus === 'pulling' ? Math.max(syncProgress, 3) : (syncOpStatus === 'success' ? 100 : 0)}%` }}
+                              />
+                            </div>
+
+                            <p className="text-[10px] text-slate-300 font-medium truncate">
+                              {syncOpStatus === 'pulling' ? (syncStepText || 'Processando importação...') : (syncOpStatus === 'success' ? 'Importação finalizada com sucesso' : 'Aguardando ação de importação')}
+                            </p>
+                          </div>
+                        </div>
                       </div>
 
-                      {/* Caixa de Notificação de Progresso e Resultado */}
+                      {/* Caixa de Notificação de Progresso Detalhado */}
                       {syncOpStatus === 'pushing' && (
-                        <div className="p-4 bg-indigo-50/90 border border-indigo-200 rounded-xl flex items-center gap-3">
-                          <Loader2 className="w-5 h-5 text-indigo-600 animate-spin shrink-0" />
-                          <div className="space-y-0.5">
-                            <p className="text-xs font-bold text-indigo-950 uppercase tracking-wider">A Carregar Dados Locais para PostgreSQL...</p>
-                            <p className="text-[11px] text-indigo-800 font-medium leading-relaxed">
-                              {syncOpMessage}
-                            </p>
+                        <div className="p-4 bg-indigo-950 text-white border border-indigo-800 rounded-xl space-y-3 shadow-md">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2.5">
+                              <Loader2 className="w-5 h-5 text-indigo-400 animate-spin shrink-0" />
+                              <div>
+                                <p className="text-xs font-bold uppercase tracking-wider text-indigo-200">A Carregar Dados Locais para PostgreSQL...</p>
+                                <p className="text-[11px] text-indigo-300 font-medium">{syncStepText || syncOpMessage}</p>
+                              </div>
+                            </div>
+                            <span className="text-emerald-400 font-extrabold text-sm tracking-wider font-mono">{syncProgress}%</span>
+                          </div>
+                          
+                          <div className="w-full bg-indigo-900/80 rounded-full h-3 overflow-hidden p-0.5 border border-indigo-700">
+                            <div
+                              className="bg-gradient-to-r from-indigo-500 via-purple-500 to-emerald-400 h-full rounded-full transition-all duration-300"
+                              style={{ width: `${Math.max(syncProgress, 3)}%` }}
+                            />
                           </div>
                         </div>
                       )}
 
                       {syncOpStatus === 'pulling' && (
-                        <div className="p-4 bg-emerald-50/90 border border-emerald-200 rounded-xl flex items-center gap-3">
-                          <Loader2 className="w-5 h-5 text-emerald-600 animate-spin shrink-0" />
-                          <div className="space-y-0.5">
-                            <p className="text-xs font-bold text-emerald-950 uppercase tracking-wider">A Importar do PostgreSQL para Local...</p>
-                            <p className="text-[11px] text-emerald-800 font-medium leading-relaxed">
-                              {syncOpMessage}
-                            </p>
+                        <div className="p-4 bg-emerald-950 text-white border border-emerald-800 rounded-xl space-y-3 shadow-md">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2.5">
+                              <Loader2 className="w-5 h-5 text-emerald-400 animate-spin shrink-0" />
+                              <div>
+                                <p className="text-xs font-bold uppercase tracking-wider text-emerald-200">A Importar do PostgreSQL para Local...</p>
+                                <p className="text-[11px] text-emerald-300 font-medium">{syncStepText || syncOpMessage}</p>
+                              </div>
+                            </div>
+                            <span className="text-emerald-400 font-extrabold text-sm tracking-wider font-mono">{syncProgress}%</span>
+                          </div>
+                          
+                          <div className="w-full bg-emerald-900/80 rounded-full h-3 overflow-hidden p-0.5 border border-emerald-700">
+                            <div
+                              className="bg-gradient-to-r from-emerald-500 via-teal-400 to-cyan-300 h-full rounded-full transition-all duration-300"
+                              style={{ width: `${Math.max(syncProgress, 3)}%` }}
+                            />
                           </div>
                         </div>
                       )}

@@ -882,7 +882,7 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
   const [isClosingPeriod, setIsClosingPeriod] = useState<boolean>(true); // Periodo de Fechamento default active
   const [useNpp, setUseNpp] = useState<boolean>(() => {
     const saved = safeGetItem('sigep_use_npp_v1');
-    return saved === 'true'; // padrão falso
+    return saved !== null ? saved === 'true' : true; // Padrão com NPP ativado (MAC+NPP+NPT)/3
   });
 
   const handleToggleNpp = (val: boolean) => {
@@ -1191,6 +1191,46 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
     safeSetItem(LOCAL_STORAGE_GRADES_KEY, JSON.stringify(generated));
   }, []);
 
+  // Sincronização automática inicial de utilizadores/credenciais a partir do servidor central
+  useEffect(() => {
+    let isMounted = true;
+    const autoSyncStaffOnBoot = async () => {
+      try {
+        const apiUrl = await resolveWorkingApiUrl(schoolSettings?.syncServerUrl);
+        if (!apiUrl) return;
+        const res = await fetchWithTimeout(`${apiUrl}/api/funcionarios`, {}, 5000);
+        if (res.ok) {
+          const remoteStaff = await res.json();
+          if (isMounted && Array.isArray(remoteStaff) && remoteStaff.length > 0) {
+            setStaffList(remoteStaff);
+            safeSetItem(LOCAL_STORAGE_STAFF_KEY, JSON.stringify(remoteStaff));
+            console.log('[SIGEP Sync] Utilizadores e credenciais sincronizados com sucesso a partir do servidor central.');
+          }
+        }
+      } catch (e) {
+        // Silencioso se o servidor backend offline
+      }
+    };
+    autoSyncStaffOnBoot();
+    return () => { isMounted = false; };
+  }, [schoolSettings?.syncServerUrl]);
+
+  const fetchWithTimeout = async (url: string, options: RequestInit = {}, timeoutMs = 8000): Promise<Response> => {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, { ...options, signal: controller.signal });
+      clearTimeout(id);
+      return res;
+    } catch (err: any) {
+      clearTimeout(id);
+      if (err.name === 'AbortError') {
+        throw new Error(`Tempo limite esgotado (${timeoutMs / 1000}s) ao conectar ao servidor ${url}. O servidor não respondeu.`);
+      }
+      throw err;
+    }
+  };
+
   const handleUpdateSchoolSettings = (updated: SchoolSettings) => {
     setSchoolSettings(updated);
     safeSetItem(LOCAL_STORAGE_SCHOOL_SETTINGS_KEY, JSON.stringify(updated));
@@ -1198,128 +1238,186 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
     // Background configuration push to PostgreSQL if enabled
     if (updated.syncEnabled && updated.syncServerUrl) {
       const url = updated.syncServerUrl;
-      fetch(`${url}/api/config`, {
+      fetchWithTimeout(`${url}/api/config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ schoolSettings: updated })
-      }).catch(err => console.warn("Erro ao salvar config no Postgres:", err));
+      }, 5000).catch(err => console.warn("Erro ao salvar config no Postgres:", err));
     }
   };
 
-  const pushData = async (settingsToUse = schoolSettings) => {
-    let rawUrl = settingsToUse.syncServerUrl || (typeof window !== 'undefined' ? window.location.origin : '');
-    if (!rawUrl) rawUrl = typeof window !== 'undefined' ? window.location.origin : '';
-    if (!/^https?:\/\//i.test(rawUrl)) {
-      rawUrl = 'http://' + rawUrl;
+  const resolveWorkingApiUrl = async (configuredUrl?: string): Promise<string> => {
+    let formatted = (configuredUrl || '').trim();
+    if (formatted) {
+      if (!/^https?:\/\//i.test(formatted)) formatted = 'http://' + formatted;
+      formatted = formatted.replace(/\/$/, '');
+
+      try {
+        const controller = new AbortController();
+        const id = setTimeout(() => controller.abort(), 2500);
+        const res = await fetch(`${formatted}/api/health`, { signal: controller.signal, mode: 'cors' });
+        clearTimeout(id);
+        if (res.ok) return formatted;
+      } catch (e) {
+        console.warn(`[SIGEP Sync] Servidor no IP ${formatted} não respondeu ao teste. Verificando conexão local...`);
+      }
     }
-    const url = rawUrl.replace(/\/$/, '');
+
+    // 1. Tentar caminho relativo da própria janela
+    try {
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), 2000);
+      const res = await fetch(`/api/health`, { signal: controller.signal });
+      clearTimeout(id);
+      if (res.ok) return typeof window !== 'undefined' ? window.location.origin : '';
+    } catch (e) {}
+
+    // 2. Tentar http://localhost:3000
+    try {
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), 2000);
+      const res = await fetch(`http://localhost:3000/api/health`, { signal: controller.signal });
+      clearTimeout(id);
+      if (res.ok) return 'http://localhost:3000';
+    } catch (e) {}
+
+    // 3. Fallback para formatted
+    if (formatted) return formatted;
+    return typeof window !== 'undefined' ? window.location.origin : '';
+  };
+
+  const pushData = async (
+    settingsToUse = schoolSettings,
+    onProgress?: (percent: number, stepMessage: string) => void
+  ) => {
+    onProgress?.(2, "Resolvendo e testando rota de conexão com o Servidor...");
+    const url = await resolveWorkingApiUrl(settingsToUse.syncServerUrl);
 
     setVbaLog("Iniciando envio (Push) de dados locais para o banco PostgreSQL central...");
-    
-    // Alunos
-    const resAlunos = await fetch(`${url}/api/alunos/sync`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(students)
-    });
-    if (!resAlunos.ok) throw new Error("Erro ao sincronizar alunos");
+    onProgress?.(5, "Iniciando conexão e validação de dados...");
 
-    // Notas
-    const resNotas = await fetch(`${url}/api/notas/sync`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(grades)
-    });
-    if (!resNotas.ok) throw new Error("Erro ao sincronizar notas");
+    // Envio fracionado em lotes (batching) para escalar com milhares de registros sem estourar tempo limite
+    const sendBatchChunks = async (
+      endpoint: string,
+      items: any[],
+      startPct: number,
+      endPct: number,
+      label: string
+    ) => {
+      if (!Array.isArray(items) || items.length === 0) {
+        onProgress?.(endPct, `Sem dados em ${label}.`);
+        const res = await fetchWithTimeout(`${url}${endpoint}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify([])
+        }, 15000);
+        return res;
+      }
 
-    // Funcionários
-    const resStaff = await fetch(`${url}/api/funcionarios/sync`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(staffList)
-    });
-    if (!resStaff.ok) throw new Error("Erro ao sincronizar funcionários");
+      const chunkSize = 500; // Tamanho ideal do lote por requisição
+      const totalChunks = Math.ceil(items.length / chunkSize);
 
-    // Grelha Curricular
+      for (let i = 0; i < totalChunks; i++) {
+        const chunk = items.slice(i * chunkSize, (i + 1) * chunkSize);
+        const currentPct = Math.min(
+          99,
+          Math.round(startPct + ((i + 1) / totalChunks) * (endPct - startPct))
+        );
+        
+        onProgress?.(
+          currentPct,
+          `A enviar ${label} (Lote ${i + 1}/${totalChunks} • ${chunk.length} de ${items.length} registros)...`
+        );
+
+        const res = await fetchWithTimeout(`${url}${endpoint}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(chunk)
+        }, 25000);
+
+        if (!res.ok) throw new Error(`Erro ao sincronizar ${label} (Lote ${i + 1})`);
+      }
+    };
+
+    // 1. Alunos (10% -> 30%)
+    await sendBatchChunks('/api/alunos/sync', students, 10, 30, 'Cadastros e Alunos');
+
+    // 2. Notas (30% -> 55%)
+    await sendBatchChunks('/api/notas/sync', grades, 30, 55, 'Pautas e Lançamentos de Notas');
+
+    // 3. Funcionários (55% -> 70%)
+    await sendBatchChunks('/api/funcionarios/sync', staffList, 55, 70, 'Recursos Humanos e Docentes');
+
+    // 4. Grelha Curricular (70% -> 82%)
     const savedGrelha = localStorage.getItem('sigep_grelha_curricular_pedagogia_v5_magisterio');
     const grelha = savedGrelha ? JSON.parse(savedGrelha) : carregarGrelhaCurricular();
-    const resGrelha = await fetch(`${url}/api/grelha/sync`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(grelha)
-    });
-    if (!resGrelha.ok) throw new Error("Erro ao sincronizar grelha curricular");
+    await sendBatchChunks('/api/grelha/sync', Array.isArray(grelha) ? grelha : [], 70, 82, 'Grelha Curricular');
 
-    // Propinas
+    // 5. Propinas (82% -> 94%)
     const savedPropinas = localStorage.getItem('sigep_propinas_v1');
     const propinas = savedPropinas ? JSON.parse(savedPropinas) : [];
-    const resPropinas = await fetch(`${url}/api/propinas/sync`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(propinas)
-    });
-    if (!resPropinas.ok) throw new Error("Erro ao sincronizar propinas");
+    await sendBatchChunks('/api/propinas/sync', Array.isArray(propinas) ? propinas : [], 82, 94, 'Finanças e Propinas');
 
-    // Configurações
-    const resConfig = await fetch(`${url}/api/config`, {
+    // 6. Configurações (94% -> 100%)
+    onProgress?.(96, 'A enviar Parâmetros e Configurações da Instituição...');
+    const resConfig = await fetchWithTimeout(`${url}/api/config`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ schoolSettings: settingsToUse })
-    });
+    }, 12000);
     if (!resConfig.ok) throw new Error("Erro ao sincronizar configurações institucionais");
 
+    onProgress?.(100, 'Sincronização global concluída com sucesso!');
     setVbaLog("Sincronização Push: Todos os dados locais foram carregados com sucesso no PostgreSQL!");
 
     return {
       studentsCount: students?.length || 0,
       staffCount: staffList?.length || 0,
       gradesCount: grades?.length || 0,
-      propinasCount: propinas?.length || 0,
+      propinasCount: Array.isArray(propinas) ? propinas.length : 0,
       grelhaCount: Array.isArray(grelha) ? grelha.length : 0
     };
   };
 
-  const pullData = async (settingsToUse = schoolSettings) => {
-    let rawUrl = settingsToUse.syncServerUrl || '';
-    if (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-      if (rawUrl.includes('localhost') || rawUrl.includes('127.0.0.1')) {
-        rawUrl = '';
-      }
-    }
-    if (!rawUrl && typeof window !== 'undefined') {
-      rawUrl = window.location.origin;
-    }
-    if (rawUrl && !/^https?:\/\//i.test(rawUrl)) {
-      rawUrl = 'http://' + rawUrl;
-    }
-    const url = rawUrl ? rawUrl.replace(/\/$/, '') : '';
+  const pullData = async (
+    settingsToUse = schoolSettings,
+    onProgress?: (percent: number, stepMessage: string) => void
+  ) => {
+    onProgress?.(2, "Resolvendo e testando rota de conexão com o Servidor...");
+    const url = await resolveWorkingApiUrl(settingsToUse.syncServerUrl);
 
     setVbaLog("Buscando dados remotos do PostgreSQL central...");
+    onProgress?.(5, 'A conectar ao banco PostgreSQL central...');
 
-    // Alunos
-    const resAlunos = await fetch(`${url}/api/alunos`);
+    // 1. Alunos (5% -> 25%)
+    onProgress?.(15, 'A importar Cadastros, Matrículas e Estudantes...');
+    const resAlunos = await fetchWithTimeout(`${url}/api/alunos`, {}, 12000);
     if (!resAlunos.ok) throw new Error("Falha ao buscar alunos do servidor");
     const gotStudents = await resAlunos.json();
 
-    // Notas
-    const resNotas = await fetch(`${url}/api/notas`);
+    // 2. Notas (25% -> 50%)
+    onProgress?.(35, 'A importar Pautas, Mini-Pautas e Avaliações...');
+    const resNotas = await fetchWithTimeout(`${url}/api/notas`, {}, 15000);
     if (!resNotas.ok) throw new Error("Falha ao buscar notas do servidor");
     const gotGrades = await resNotas.json();
 
-    // Funcionários
-    const resStaff = await fetch(`${url}/api/funcionarios`);
+    // 3. Funcionários (50% -> 70%)
+    onProgress?.(60, 'A importar Recursos Humanos e Docentes...');
+    const resStaff = await fetchWithTimeout(`${url}/api/funcionarios`, {}, 12000);
     if (!resStaff.ok) throw new Error("Falha ao buscar funcionários do servidor");
     const gotStaff = await resStaff.json();
 
-    // Propinas
-    const resPropinas = await fetch(`${url}/api/propinas`);
+    // 4. Propinas (70% -> 85%)
+    onProgress?.(75, 'A importar Finanças, Recibos e Mensalidades...');
+    const resPropinas = await fetchWithTimeout(`${url}/api/propinas`, {}, 12000);
     if (!resPropinas.ok) throw new Error("Falha ao buscar propinas do servidor");
     const gotPropinas = await resPropinas.json();
 
-    // Grelha Curricular
+    // 5. Grelha Curricular (85% -> 95%)
+    onProgress?.(90, 'A importar Grelha Curricular e Matrizes...');
     let gotGrelha = null;
     try {
-      const resGrelha = await fetch(`${url}/api/grelha`);
+      const resGrelha = await fetchWithTimeout(`${url}/api/grelha`, {}, 10000);
       if (resGrelha.ok) {
         gotGrelha = await resGrelha.json();
       }
@@ -1327,12 +1425,12 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
       console.warn("Falha ao carregar grelha curricular remota, usando local:", e);
     }
 
-    // Set states
+    // Process & Save
+    onProgress?.(98, 'A atualizar banco de dados local e memória...');
     setStudents(gotStudents);
     setGrades(gotGrades);
     setStaffList(gotStaff);
 
-    // Save to localStorage
     safeSetItem(LOCAL_STORAGE_STUDENTS_KEY, JSON.stringify(gotStudents));
     safeSetItem(LOCAL_STORAGE_GRADES_KEY, JSON.stringify(gotGrades));
     safeSetItem(LOCAL_STORAGE_STAFF_KEY, JSON.stringify(gotStaff));
@@ -1345,6 +1443,7 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
       window.dispatchEvent(new CustomEvent('sigep:data-updated'));
     }
 
+    onProgress?.(100, 'Importação global concluída com sucesso!');
     setVbaLog("Importação concluída: Todos os dados foram atualizados a partir do PostgreSQL!");
 
     return {
@@ -1368,9 +1467,9 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
         }
         
         // 1. Funcionários
-        let resStaff = await fetch(`${baseUrl}/api/funcionarios`).catch(() => null);
+        let resStaff = await fetchWithTimeout(`${baseUrl}/api/funcionarios`, {}, 4000).catch(() => null);
         if ((!resStaff || !resStaff.ok) && baseUrl !== '') {
-          resStaff = await fetch('/api/funcionarios').catch(() => null);
+          resStaff = await fetchWithTimeout('/api/funcionarios', {}, 4000).catch(() => null);
         }
         if (resStaff && resStaff.ok) {
           const gotStaff = await resStaff.json();
@@ -1381,9 +1480,9 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
         }
 
         // 2. Alunos
-        let resAlunos = await fetch(`${baseUrl}/api/alunos`).catch(() => null);
+        let resAlunos = await fetchWithTimeout(`${baseUrl}/api/alunos`, {}, 4000).catch(() => null);
         if ((!resAlunos || !resAlunos.ok) && baseUrl !== '') {
-          resAlunos = await fetch('/api/alunos').catch(() => null);
+          resAlunos = await fetchWithTimeout('/api/alunos', {}, 4000).catch(() => null);
         }
         if (resAlunos && resAlunos.ok) {
           const gotStudents = await resAlunos.json();
@@ -1394,9 +1493,9 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
         }
 
         // 3. Notas
-        let resNotas = await fetch(`${baseUrl}/api/notas`).catch(() => null);
+        let resNotas = await fetchWithTimeout(`${baseUrl}/api/notas`, {}, 4000).catch(() => null);
         if ((!resNotas || !resNotas.ok) && baseUrl !== '') {
-          resNotas = await fetch('/api/notas').catch(() => null);
+          resNotas = await fetchWithTimeout('/api/notas', {}, 4000).catch(() => null);
         }
         if (resNotas && resNotas.ok) {
           const gotGrades = await resNotas.json();
@@ -1407,9 +1506,9 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
         }
 
         // 4. Propinas
-        let resPropinas = await fetch(`${baseUrl}/api/propinas`).catch(() => null);
+        let resPropinas = await fetchWithTimeout(`${baseUrl}/api/propinas`, {}, 4000).catch(() => null);
         if ((!resPropinas || !resPropinas.ok) && baseUrl !== '') {
-          resPropinas = await fetch('/api/propinas').catch(() => null);
+          resPropinas = await fetchWithTimeout('/api/propinas', {}, 4000).catch(() => null);
         }
         if (resPropinas && resPropinas.ok) {
           const gotPropinas = await resPropinas.json();
@@ -1417,9 +1516,9 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
         }
 
         // 5. Configuração da Escola
-        let resConfig = await fetch(`${baseUrl}/api/config`).catch(() => null);
+        let resConfig = await fetchWithTimeout(`${baseUrl}/api/config`, {}, 4000).catch(() => null);
         if ((!resConfig || !resConfig.ok) && baseUrl !== '') {
-          resConfig = await fetch('/api/config').catch(() => null);
+          resConfig = await fetchWithTimeout('/api/config', {}, 4000).catch(() => null);
         }
         if (resConfig && resConfig.ok) {
           const gotConfig = await resConfig.json();
@@ -1850,7 +1949,7 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
     }
   };
 
-  // Update a grade's MT directly (used in the Pauta Geral PAUTA1 cells editing)
+  // Update a grade's MT directly
   const handleUpdateGradeMT = (
     studentId: string,
     subject: SubjectType,
@@ -1866,18 +1965,34 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
       setVbaLog("Edição bloqueada: O sistema está em modo leitura devido à expiração da licença.");
       return;
     }
-    const updated = grades.map(row => {
-      if (row.studentId === studentId && row.subject === subject && row.trimester === trimester) {
-        // Also update MAC or NPT dummy boundaries to match
-        return {
-          ...row,
-          mt: value,
-          mac: value !== null ? value : row.mac,
-          npt: value !== null ? value : row.npt
-        };
-      }
-      return row;
-    });
+    const studentObj = students.find(s => s.id === studentId);
+    const studentName = studentObj ? studentObj.name : studentId;
+    const exists = grades.some(row => row.studentId === studentId && row.subject === subject && row.trimester === trimester);
+    let updated: GradeRow[];
+    if (exists) {
+      updated = grades.map(row => {
+        if (row.studentId === studentId && row.subject === subject && row.trimester === trimester) {
+          return {
+            ...row,
+            mt: value,
+            mac: value !== null ? value : row.mac,
+            npt: value !== null ? value : row.npt
+          };
+        }
+        return row;
+      });
+    } else {
+      updated = [...grades, {
+        studentId,
+        studentName,
+        subject,
+        trimester,
+        mac: value,
+        npp: null,
+        npt: value,
+        mt: value
+      }];
+    }
     saveState(students, updated);
   };
 
@@ -1897,15 +2012,33 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
       setVbaLog("Edição bloqueada: O sistema está em modo leitura devido à expiração da licença.");
       return;
     }
-    const updated = grades.map(row => {
-      if (row.studentId === studentId && row.subject === subject && row.trimester === trimester) {
-        return {
-          ...row,
-          ...fields
-        };
-      }
-      return row;
-    });
+    const studentObj = students.find(s => s.id === studentId);
+    const studentName = studentObj ? studentObj.name : studentId;
+    const exists = grades.some(row => row.studentId === studentId && row.subject === subject && row.trimester === trimester);
+    let updated: GradeRow[];
+    if (exists) {
+      updated = grades.map(row => {
+        if (row.studentId === studentId && row.subject === subject && row.trimester === trimester) {
+          return {
+            ...row,
+            ...fields
+          };
+        }
+        return row;
+      });
+    } else {
+      const newRow: GradeRow = {
+        studentId,
+        studentName,
+        subject,
+        trimester,
+        mac: fields.mac ?? null,
+        npp: fields.npp ?? null,
+        npt: fields.npt ?? null,
+        mt: fields.mt ?? null
+      };
+      updated = [...grades, newRow];
+    }
     saveState(students, updated);
   };
 
@@ -1914,7 +2047,7 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
     studentId: string,
     subject: SubjectType,
     trimester: 'I' | 'II' | 'III',
-    field: 'mac' | 'npt' | 'mt',
+    field: 'mac' | 'npp' | 'npt' | 'mt',
     value: number | null
   ) => {
     const canEditGrades = canUserEditModule('MINI_PAUTAS') || canUserEditModule('PAUTAS') || canUserEditModule('BANCO_DE_DADOS');
@@ -1926,19 +2059,51 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
       setVbaLog("Edição bloqueada: O sistema está em modo leitura devido à expiração da licença.");
       return;
     }
-    const updated = grades.map(row => {
-      if (row.studentId === studentId && row.subject === subject && row.trimester === trimester) {
-        const item = { ...row, [field]: value };
-        // Recalculate MT dynamically if changing mac or npt
-        if (field === 'mac' || field === 'npt') {
-          const macVal = item.mac ?? 0;
-          const nptVal = item.npt ?? 0;
-          item.mt = parseFloat(((macVal + nptVal) / 2).toFixed(1));
+    const studentObj = students.find(s => s.id === studentId);
+    const studentName = studentObj ? studentObj.name : studentId;
+    const exists = grades.some(row => row.studentId === studentId && row.subject === subject && row.trimester === trimester);
+    let updated: GradeRow[];
+    if (exists) {
+      updated = grades.map(row => {
+        if (row.studentId === studentId && row.subject === subject && row.trimester === trimester) {
+          const item = { ...row, [field]: value };
+          // Recalculate MT dynamically if changing mac or npt or npp
+          if (field === 'mac' || field === 'npt' || field === 'npp') {
+            const macVal = item.mac ?? 0;
+            const nppVal = item.npp ?? 0;
+            const nptVal = item.npt ?? 0;
+            item.mt = useNpp
+              ? parseFloat(((macVal + nppVal + nptVal) / 3).toFixed(1))
+              : parseFloat(((macVal + nptVal) / 2).toFixed(1));
+          }
+          return item;
         }
-        return item;
+        return row;
+      });
+    } else {
+      const macVal = field === 'mac' ? value : null;
+      const nppVal = field === 'npp' ? value : null;
+      const nptVal = field === 'npt' ? value : null;
+      let mtVal = field === 'mt' ? value : null;
+      if (mtVal === null && (macVal !== null || nppVal !== null || nptVal !== null)) {
+        const m = macVal ?? 0;
+        const p = nppVal ?? 0;
+        const t = nptVal ?? 0;
+        mtVal = useNpp
+          ? parseFloat(((m + p + t) / 3).toFixed(1))
+          : parseFloat(((m + t) / 2).toFixed(1));
       }
-      return row;
-    });
+      updated = [...grades, {
+        studentId,
+        studentName,
+        subject,
+        trimester,
+        mac: macVal,
+        npp: nppVal,
+        npt: nptVal,
+        mt: mtVal
+      }];
+    }
     saveState(students, updated);
   };
 
@@ -3695,8 +3860,8 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
                     settings={schoolSettings}
                     onChangeSettings={handleUpdateSchoolSettings}
                     userRole={userRole}
-                    onPullData={pullData}
-                    onPushData={pushData}
+                    onPullData={(onProgress) => pullData(schoolSettings, onProgress)}
+                    onPushData={(onProgress) => pushData(schoolSettings, onProgress)}
                   />
                 )}
 

@@ -18,6 +18,32 @@ let isQuitting = false;
 
 // Configure autoUpdater
 autoUpdater.autoDownload = false;
+try {
+  autoUpdater.setFeedURL({
+    provider: 'github',
+    owner: 'watchimona',
+    repo: 'SIGEP'
+  });
+} catch (e) {
+  console.log('AutoUpdater feed URL init note:', e);
+}
+
+// Garantir instância única (Single Instance Lock) para prevenir abertura de múltiplos executáveis simultâneos
+const gotTheLock = app.requestSingleInstanceLock();
+
+if (!gotTheLock) {
+  console.log('Outra instância do SIGEP já está ativa. Encerrando o novo processo...');
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
+
+  app.on('ready', createWindow);
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -133,7 +159,6 @@ function createWindow() {
   }
 }
 
-app.on('ready', createWindow);
 
 app.on('before-quit', () => {
   isQuitting = true;

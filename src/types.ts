@@ -863,6 +863,13 @@ export type StaffRole =
   | 'TECNICO_ADMINISTRATIVO'
   | 'SIGEP';
 
+export interface CurricularAssignment {
+  class: string;
+  section: string;
+  subject: string;
+  specialty?: string;
+}
+
 export interface Staff {
   id: string; // E.g. MAP674
   name: string;
@@ -870,6 +877,7 @@ export interface Staff {
   classes?: string[]; // assigned classes for teaching
   sections?: string[]; // assigned turmas/sections for teaching
   subjects?: SubjectType[]; // assigned subjects
+  assignments?: CurricularAssignment[]; // Atribuições acumuladas detalhadas (Classe + Turma + Disciplina)
   specialty?: string; // assigned specialty/ramo
   password?: string; // password/senhas
   is_root?: boolean; // flag de utilizador raiz do sistema

@@ -236,10 +236,17 @@ export default function PautaTrimester({
   };
 
   const isTrimesterSequenceBlocked = (trimester: 'I' | 'II' | 'III') => {
-    const trimIStatus = schoolSettings?.trimesterI_Status || 'ABERTO';
-    const trimIIStatus = schoolSettings?.trimesterII_Status || 'FECHADO';
-    if (trimester === 'II' && trimIStatus === 'ABERTO') return true;
-    if (trimester === 'III' && trimIIStatus === 'ABERTO') return true;
+    if (trimester === 'I') return false;
+    if (trimester === 'II') {
+      if (schoolSettings?.trimesterII_Status === 'ABERTO') return false;
+      const trimIStatus = schoolSettings?.trimesterI_Status || 'ABERTO';
+      return trimIStatus === 'ABERTO';
+    }
+    if (trimester === 'III') {
+      if (schoolSettings?.trimesterIII_Status === 'ABERTO') return false;
+      const trimIIStatus = schoolSettings?.trimesterII_Status || 'FECHADO';
+      return trimIIStatus === 'ABERTO';
+    }
     return false;
   };
 
@@ -1777,7 +1784,7 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
     setAlertMsg('Visualização Apenas: O lançamento e a edição de notas devem ser realizados estritamente através da secção "MINI PAUTAS" na barra lateral.');
   };
 
-  const saveInlineEdit = (studentId: string, subject: string, field: 'mac' | 'npt') => {
+  const saveInlineEdit = (studentId: string, subject: string, field: 'mac' | 'npp' | 'npt') => {
     if (!editingCell) return;
     
     const parsed = editVal === '' ? null : Math.min(maxLimit, Math.max(0, parseFloat(editVal.replace(',', '.')) || 0));
@@ -1785,13 +1792,14 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
     // Get currently existing values to recalculate MT
     const row = getGradeRecord(studentId, subject);
     const newMac = field === 'mac' ? parsed : row.mac;
+    const newNpp = field === 'npp' ? parsed : row.npp;
     const newNpt = field === 'npt' ? parsed : row.npt;
 
     let newMt: number | null = null;
     if (useNpp) {
-      if (newMac !== null || (row.npp !== undefined && row.npp !== null) || newNpt !== null) {
+      if (newMac !== null || (newNpp !== undefined && newNpp !== null) || newNpt !== null) {
         const macVal = newMac ?? 0;
-        const nppVal = row.npp ?? 0;
+        const nppVal = newNpp ?? 0;
         const nptVal = newNpt ?? 0;
         newMt = parseFloat(((macVal + nppVal + nptVal) / 3).toFixed(1));
       }
@@ -1813,7 +1821,9 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
         subject,
         trimester: activeTrim,
         fields: {
-          [field]: parsed,
+          mac: newMac,
+          npp: newNpp,
+          npt: newNpt,
           mt: newMt
         }
       });
@@ -1823,7 +1833,9 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
     }
 
     onUpdateGradeFields(studentId, subject, activeTrim, {
-      [field]: parsed,
+      mac: newMac,
+      npp: newNpp,
+      npt: newNpt,
       mt: newMt
     });
     // Immediately remove temporary unlock to lock the cell again

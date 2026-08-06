@@ -6,6 +6,7 @@
 import React, { useState, useMemo } from 'react';
 import { Student, SchoolSettings, UserRole, Staff, GradeRow, ModalityType, SEED_GRELHA_CURRICULAR, carregarGrelhaCurricular, getLeiBaseForCertificate } from '../types';
 import { gerarCodigoPauta } from '../utils/pautaLogic';
+import { getArchivedYears, ArchiveYearRecord } from '../utils/archiveUtils';
 import BiSectorSelect from './BiSectorSelect';
 import { CertificadoDocument } from './documents/CertificadoDocument';
 import { DeclaracaoDocument, toTitleCaseName, getDocTypeDetails } from './documents/DeclaracaoDocument';
@@ -629,8 +630,36 @@ export default function DeclaracoesCertificados({
   const [biDate, setBiDate] = useState('');
   const [docTypeSelected, setDocTypeSelected] = useState<'BI' | 'CEDULA' | 'PASSAPORTE'>('BI');
   
-  // School parameters
-  const [anoLectivo, setAnoLectivo] = useState('2025/2026');
+  // School parameters & Historical Years
+  const [anoLectivo, setAnoLectivo] = useState(schoolSettings.academicYear || '2025/2026');
+  const [archivedYears, setArchivedYears] = useState<ArchiveYearRecord[]>([]);
+
+  React.useEffect(() => {
+    const archives = getArchivedYears(students, grades);
+    setArchivedYears(archives);
+  }, [students, grades]);
+
+  // Available academic years list for document selection
+  const availableAcademicYears = useMemo(() => {
+    const setYears = new Set<string>();
+    const currentYearStr = schoolSettings.academicYear || '2025/2026';
+    setYears.add(currentYearStr);
+    archivedYears.forEach(a => setYears.add(a.academicYear));
+    return Array.from(setYears);
+  }, [schoolSettings.academicYear, archivedYears]);
+
+  // Determine active dataset (students & grades) based on selected anoLectivo
+  const { activeStudents, activeGrades } = useMemo(() => {
+    const currentYearStr = schoolSettings.academicYear || '2025/2026';
+    if (anoLectivo === currentYearStr) {
+      return { activeStudents: students, activeGrades: grades };
+    }
+    const match = archivedYears.find(a => a.academicYear === anoLectivo);
+    if (match) {
+      return { activeStudents: match.students || [], activeGrades: match.grades || [] };
+    }
+    return { activeStudents: students, activeGrades: grades };
+  }, [anoLectivo, schoolSettings.academicYear, students, grades, archivedYears]);
   const [livroRegisto, setLivroRegisto] = useState('');
   const [folhaRegisto, setFolhaRegisto] = useState('');
   const [decretoCriacao, setDecretoCriacao] = useState(schoolSettings.decretoExecutivo || schoolSettings.despachoCriacao || 'Decreto Executivo nº 445/16 de 25 de Novembro');
@@ -932,7 +961,7 @@ export default function DeclaracoesCertificados({
     const studentIdsByClass: Record<string, string[]> = {};
     const allAssociatedIds = new Set<string>([student.id]);
 
-    students.forEach(s => {
+    activeStudents.forEach(s => {
       const sName = (s.name || '').trim().toLowerCase();
       const sBI = (s.bi || '').trim().toLowerCase();
       const isMatch = s.id === student.id || (targetBI && sBI && sBI === targetBI) || (targetName && sName === targetName);
@@ -953,7 +982,7 @@ export default function DeclaracoesCertificados({
       const classIds = studentIdsByClass[clsStr] || [];
       const searchIds = classIds.length > 0 ? classIds : Array.from(allAssociatedIds);
 
-      const matchingGrades = grades.filter(g => 
+      const matchingGrades = activeGrades.filter(g => 
         searchIds.includes(g.studentId) && isSameSubject(g.subject, targetSubj)
       );
 
@@ -1169,31 +1198,31 @@ export default function DeclaracoesCertificados({
     setNotaEstagio(estagioVal || '');
     setNotaPAP(papVal || '');
     setMediaFinalCurso(mfVal || '');
-  }, [students, grades, subjectsForCertificado]);
+  }, [activeStudents, activeGrades, subjectsForCertificado]);
 
   // Handle student search filtering
   const filteredStudents = useMemo(() => {
     if (!searchQuery) return [];
     const q = searchQuery.toLowerCase();
-    return students.filter(s => 
+    return activeStudents.filter(s => 
       s.name.toLowerCase().includes(q) || 
       s.id.toLowerCase().includes(q) ||
       (s.bi && s.bi.toLowerCase().includes(q))
     ).slice(0, 5);
-  }, [students, searchQuery]);
+  }, [activeStudents, searchQuery]);
 
   // Auto-select student when searchQuery matches student ID or BI directly
   React.useEffect(() => {
     if (!searchQuery) return;
     const q = searchQuery.trim().toLowerCase();
-    const exactMatch = students.find(s => 
+    const exactMatch = activeStudents.find(s => 
       s.id.toLowerCase() === q || 
       (s.bi && s.bi.toLowerCase() === q)
     );
     if (exactMatch && (!selectedStudent || selectedStudent.id !== exactMatch.id)) {
       handleSelectStudent(exactMatch);
     }
-  }, [searchQuery, students, selectedStudent]);
+  }, [searchQuery, activeStudents, selectedStudent]);
 
   // Autopopulate fields when a student is selected
   const handleSelectStudent = (student: Student) => {
@@ -1217,7 +1246,7 @@ export default function DeclaracoesCertificados({
     setSearchQuery('');
 
     // Auto-calculate student position for Folha / Pauta
-    const sameClassStudents = students.filter(s => s.class === student.class && s.section === student.section);
+    const sameClassStudents = activeStudents.filter(s => s.class === student.class && s.section === student.section);
     const posIndex = sameClassStudents.findIndex(s => s.id === student.id);
     const posNum = posIndex >= 0 ? posIndex + 1 : 1;
     setFolhaRegisto(String(posNum).padStart(3, '0'));
@@ -2937,10 +2966,38 @@ export default function DeclaracoesCertificados({
               
               {/* Student Search & Auto-Fill */}
               <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-4">
+                
+                {/* Year Selection Banner */}
+                <div className="bg-gradient-to-r from-indigo-50 via-slate-50 to-indigo-50/60 border border-indigo-100 rounded-xl p-3 flex flex-wrap items-center justify-between gap-3 text-xs">
+                  <div className="flex items-center gap-2">
+                    <Calendar className="w-4 h-4 text-indigo-600 shrink-0" />
+                    <div>
+                      <span className="font-extrabold text-indigo-950 block">Ano Lectivo de Origem do Documento:</span>
+                      <span className="text-[10px] text-slate-500">Guia a busca de notas e alunos nas pautas deste ano específico</span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={anoLectivo}
+                      onChange={(e) => setAnoLectivo(e.target.value)}
+                      className="bg-white border border-indigo-300 rounded-lg px-3 py-1.5 font-bold text-indigo-950 shadow-2xs focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer text-xs"
+                    >
+                      {availableAcademicYears.map(yr => (
+                        <option key={yr} value={yr}>
+                          {yr} {yr === (schoolSettings.academicYear || '2025/2026') ? '(Ano Ativo)' : '(Histórico Arquivado)'}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="text-[11px] font-bold text-indigo-700 bg-indigo-100/90 px-2.5 py-1 rounded-lg">
+                      {activeStudents.length} Alunos
+                    </span>
+                  </div>
+                </div>
+
                 <div className="flex items-center justify-between">
                   <div className="font-bold text-slate-800 text-xs uppercase tracking-wider flex items-center gap-2">
                     <Search className="w-4 h-4 text-indigo-600" />
-                    <span>Localizar Aluno no Sistema</span>
+                    <span>Localizar Aluno no Sistema ({anoLectivo})</span>
                   </div>
                   {selectedStudent && (
                     <button
@@ -3155,14 +3212,18 @@ export default function DeclaracoesCertificados({
 
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-xs">
               <div>
-                <label className="block text-[10px] font-extrabold text-slate-400 uppercase tracking-wide mb-1">Ano Lectivo</label>
-                <input
-                  type="text"
+                <label className="block text-[10px] font-extrabold text-slate-400 uppercase tracking-wide mb-1">Ano Lectivo do Documento</label>
+                <select
                   value={anoLectivo}
                   onChange={(e) => setAnoLectivo(e.target.value)}
-                  placeholder="2025/2026"
-                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-indigo-500 text-slate-800 font-bold"
-                />
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-indigo-500 text-slate-800 font-bold text-xs cursor-pointer"
+                >
+                  {availableAcademicYears.map(yr => (
+                    <option key={yr} value={yr}>
+                      {yr} {yr === (schoolSettings.academicYear || '2025/2026') ? '(Atual)' : '(Arquivado)'}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div>

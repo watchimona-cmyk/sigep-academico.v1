@@ -669,7 +669,9 @@ export function getSubjectsForClass(className: string, activeModality?: Modality
     if (item.modality !== modality) return false;
     if (item.class !== className) return false;
     if ((modality === 'PUNIV' || modality === 'MAGISTERIO') && resolvedSpecialty) {
-      return item.specialty === resolvedSpecialty.toUpperCase() || item.specialty === 'GERAL' || !item.specialty;
+      const itemSpec = (item.specialty || '').toUpperCase();
+      const resSpec = resolvedSpecialty.toUpperCase();
+      return itemSpec === resSpec || itemSpec === 'GERAL' || !item.specialty;
     }
     return true;
   });

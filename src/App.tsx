@@ -21,6 +21,7 @@ import UserSection from './components/UserSection';
 import LoginScreen from './components/LoginScreen';
 import RecursosHumanos from './components/RecursosHumanos';
 import DeclaracoesCertificados from './components/DeclaracoesCertificados';
+import HistoricoAnosModal from './components/HistoricoAnosModal';
 import SiGePLogo from './components/SiGePLogo';
 import EulaScreen from './components/EulaScreen';
 import SystemLockScreen from './components/SystemLockScreen';
@@ -38,6 +39,7 @@ import {
   FolderLock, 
   Lock,
   Calendar,
+  Archive,
   CheckSquare, 
   FileSpreadsheet, 
   Database, 
@@ -359,6 +361,8 @@ export default function App() {
     const savedTab = safeGetItem('sigep_active_tab_v1') as ActiveSheet | null;
     return savedTab || 'HOME';
   });
+
+  const [isHistoricoModalOpen, setIsHistoricoModalOpen] = useState(false);
 
   const [loggedInStaff, setLoggedInStaff] = useState<Staff | null>(() => {
     // Session-based auth: read from sessionStorage so closing window destroys the active login session
@@ -1801,14 +1805,6 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
   };
 
   const handleDeleteStaff = (id: string) => {
-    const directorPass = getDirectorPassword();
-    const senha = prompt("Aviso de Segurança (Eliminação de Funcionário):\nEsta operação é irreversível.\nDigite a senha do perfil Diretor Geral para validar:");
-    if (senha === null) return;
-    if (senha !== directorPass) {
-      alert("Operação rejeitada: Senha do Diretor Geral inválida.");
-      return;
-    }
-
     const updated = staffList.filter(s => s.id !== id);
     setStaffList(updated);
     safeSetItem(LOCAL_STORAGE_STAFF_KEY, JSON.stringify(updated));
@@ -3157,6 +3153,17 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
                 <span className="text-[10px]">Ano: <span className="text-indigo-600 font-extrabold">{schoolSettings.academicYear || '2025/2026'}</span></span>
               </div>
 
+              {/* Botão de Histórico e Anos Lectivos Anteriores */}
+              <button
+                type="button"
+                onClick={() => setIsHistoricoModalOpen(true)}
+                className="px-2.5 py-1 text-xs font-bold rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-800 flex items-center gap-1.5 shadow-2xs cursor-pointer transition-all shrink-0"
+                title="Consultar Pautas e Anos Lectivos Arquivados do SIGEP"
+              >
+                <Archive className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                <span className="text-[10px] font-bold">Anos Anteriores</span>
+              </button>
+
               {/* Encerrar Sessão (Logout) Button - High visibility highlight inside screen boundary */}
               <button
                 id="top-action-logout"
@@ -3877,6 +3884,7 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
                     userRole={userRole}
                     canEdit={canUserEditModule('RH')}
                     loggedInStaff={loggedInStaff}
+                    activeModality={activeModality}
                   />
                 )}
 
@@ -4251,6 +4259,21 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
                 <span className="font-mono text-[10px] font-bold text-slate-500">Fabricante Oficial: SIGEP-Group</span>
               </div>
             </div>
+
+            {/* Modal de Consulta e Histórico de Anos Lectivos Anteriores */}
+            <HistoricoAnosModal
+              isOpen={isHistoricoModalOpen}
+              onClose={() => setIsHistoricoModalOpen(false)}
+              currentStudents={hermeticStudents}
+              currentGrades={hermeticGrades}
+              schoolSettings={schoolSettings}
+              userRole={userRole}
+              staffList={staffList}
+              loggedInStaff={loggedInStaff}
+              onSelectYearForDocuments={(year) => {
+                setActiveTab('DECLARACOES_CERTIFICADOS');
+              }}
+            />
 
           </div>
         </div>

@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Staff, StaffRole, SubjectType, ModalityType, getSubjectsForClass, carregarGrelhaCurricular, getSpecialtyFullName } from '../types';
+import { Staff, StaffRole, SubjectType, ModalityType, SchoolSettings, getSubjectsForClass, carregarGrelhaCurricular, getSpecialtyFullName } from '../types';
 import { formatarNomeProprio } from '../utils/pautaLogic';
 import { 
   Users, 
@@ -42,6 +42,8 @@ interface RecursosHumanosProps {
   userRole: string;
   canEdit?: boolean;
   loggedInStaff?: Staff | null;
+  activeModality?: ModalityType;
+  schoolSettings?: SchoolSettings;
 }
 
 const ROLE_LABELS: Record<StaffRole, string> = {
@@ -110,7 +112,9 @@ export default function RecursosHumanos({
   onClearAllStaff,
   userRole,
   canEdit = true,
-  loggedInStaff
+  loggedInStaff,
+  activeModality,
+  schoolSettings
 }: RecursosHumanosProps) {
   
   // Regra de Privacidade: Apenas o próprio membro (ou Administrador Master SIGEP) pode visualizar a sua senha.
@@ -224,6 +228,12 @@ export default function RecursosHumanos({
   const [wizardSection, setWizardSection] = useState<string>('');
   const [isAssignmentWizardOpen, setIsAssignmentWizardOpen] = useState<boolean>(false);
 
+  // Estados para Modal de Autorização do Director para Eliminação na Lixeira de RH
+  const [deletingStaff, setDeletingStaff] = useState<{ id: string; name: string; role: StaffRole } | null>(null);
+  const [deleteReason, setDeleteReason] = useState<string>('');
+  const [directorPasswordInput, setDirectorPasswordInput] = useState<string>('');
+  const [deleteModalError, setDeleteModalError] = useState<string>('');
+
   // Rótulos simples para subsistema de ensino conforme requisito
   const getModalityLabel = (mod: string) => {
     if (mod === 'PUNIV') return 'Liceu';
@@ -231,14 +241,54 @@ export default function RecursosHumanos({
     return 'Ensino Primário';
   };
 
+  // Determinar subsistemas activos e ocultar subsistemas desactivados/ocultos conforme a configuração do SIGEP
+  const availableModalities = React.useMemo(() => {
+    const list: { value: 'ENSINO_PRIMARIO' | 'PUNIV' | 'MAGISTERIO'; label: string }[] = [];
+    const activeComp = schoolSettings?.activeComponents;
+
+    if (!activeComp) {
+      list.push({ value: 'ENSINO_PRIMARIO', label: 'Ensino Primário (1ª à 6ª/9ª Classe)' });
+      list.push({ value: 'PUNIV', label: 'PUNIV / II Ciclo do Ensino Secundário Geral' });
+      list.push({ value: 'MAGISTERIO', label: 'Magistério / II Ciclo do Ensino Secundário Pedagógico' });
+    } else {
+      if (activeComp.ENSINO_PRIMARIO !== false) {
+        list.push({ value: 'ENSINO_PRIMARIO', label: 'Ensino Primário (1ª à 6ª/9ª Classe)' });
+      }
+      if (activeComp.PUNIV !== false) {
+        list.push({ value: 'PUNIV', label: 'PUNIV / II Ciclo do Ensino Secundário Geral' });
+      }
+      if (activeComp.MAGISTERIO !== false) {
+        list.push({ value: 'MAGISTERIO', label: 'Magistério / II Ciclo do Ensino Secundário Pedagógico' });
+      }
+    }
+
+    if (list.length === 0) {
+      list.push({ value: 'ENSINO_PRIMARIO', label: 'Ensino Primário' });
+    }
+
+    return list;
+  }, [schoolSettings?.activeComponents]);
+
   // Subsistema / Modalidade activa no formulário (Prevalece a configuração do SIGEP)
   const [formModality, setFormModality] = useState<'ENSINO_PRIMARIO' | 'PUNIV' | 'MAGISTERIO'>(() => {
+    if (activeModality) return activeModality;
     try {
       const saved = localStorage.getItem('sigep_active_modality_v1');
-      if (saved) return saved as any;
+      if (saved && ['ENSINO_PRIMARIO', 'PUNIV', 'MAGISTERIO'].includes(saved)) return saved as any;
     } catch (err) {}
-    return 'ENSINO_PRIMARIO';
+    return availableModalities[0]?.value || 'ENSINO_PRIMARIO';
   });
+
+  // Garantir que a modalidade activa pertença aos subsistemas visíveis
+  useEffect(() => {
+    if (activeModality && availableModalities.some(m => m.value === activeModality)) {
+      setFormModality(activeModality);
+    } else if (!availableModalities.some(m => m.value === formModality)) {
+      if (availableModalities[0]) {
+        setFormModality(availableModalities[0].value);
+      }
+    }
+  }, [availableModalities, activeModality]);
 
   // Especialidade / Ramo seleccionado no formulário
   const [selectedSpecialty, setSelectedSpecialty] = useState<string>(() => {
@@ -249,6 +299,10 @@ export default function RecursosHumanos({
 
   // Sincronizar com alteração de modalidade activa do SIGEP
   useEffect(() => {
+    if (activeModality) {
+      setFormModality(activeModality);
+      return;
+    }
     const checkModality = () => {
       try {
         const saved = localStorage.getItem('sigep_active_modality_v1');
@@ -260,7 +314,7 @@ export default function RecursosHumanos({
     checkModality();
     window.addEventListener('storage', checkModality);
     return () => window.removeEventListener('storage', checkModality);
-  }, [formModality]);
+  }, [formModality, activeModality]);
 
   // Ajustar especialidade por omissão ao alterar o subsistema
   useEffect(() => {
@@ -308,7 +362,7 @@ export default function RecursosHumanos({
     // Fallback para getSubjectsForClass se a grelha não tiver itens
     if (set.size === 0) {
       classesToGather.forEach(cl => {
-        const subs = getSubjectsForClass(cl, formModality) as SubjectType[];
+        const subs = getSubjectsForClass(cl, formModality, selectedSpecialty) as SubjectType[];
         subs.forEach(s => set.add(s));
       });
     }
@@ -632,20 +686,21 @@ export default function RecursosHumanos({
     setIsAdding(false);
   };
 
-  // Excluir Colaborador de RH
+  // Excluir Colaborador de RH (Abre Modal de Autorização do Director com Registo de Motivo)
   const handleExcluirColaborador = (id: string, name: string) => {
     if (!canEdit) {
       window.alert("Permissão de Escrita Bloqueada: O Director Geral definiu este cargo como 'Apenas Visualizar'.");
       return;
     }
-    // 1. Pop-up de Confirmação Obrigatória
-    const confirmar = window.confirm(`ATENÇÃO: Deseja realmente APAGAR permanentemente o funcionário "${name}" (ID: ${id}) de Recursos Humanos? Esta acção removerá a sua credencial e impedirá o seu acesso ao sistema de imediato.`);
-    if (!confirmar) return;
-
-    onDeleteStaff(id);
-
-    // 2. Pop-up de Sucesso Obrigatório
-    window.alert(`O registo de "${name}" foi eliminado permanentemente de Recursos Humanos.`);
+    const staffObj = staffList.find(s => s.id === id);
+    setDeletingStaff({
+      id,
+      name,
+      role: staffObj?.role || 'PROFESSOR'
+    });
+    setDeleteReason('');
+    setDirectorPasswordInput('');
+    setDeleteModalError('');
   };
 
   // Filtragem e categorização fina da listagem com base na Aba de RH selecionada
@@ -1220,12 +1275,30 @@ export default function RecursosHumanos({
                     <label className="block text-xs font-extrabold text-slate-700 mb-1.5">
                       1.1 Subsistema de Ensino Activo *
                     </label>
-                    <div className="p-2.5 bg-indigo-50/60 border border-indigo-200 rounded-xl text-xs font-black text-indigo-950 flex items-center justify-between shadow-3xs">
-                      <span>{getModalityLabel(formModality)}</span>
-                      <span className="text-[10px] text-indigo-700 bg-white px-2 py-0.5 rounded-md border border-indigo-100 uppercase tracking-wider font-bold">
-                        Configuração SIGEP
-                      </span>
-                    </div>
+                    {availableModalities.length === 1 ? (
+                      <div className="p-2.5 bg-indigo-50/80 border border-indigo-200 rounded-xl text-xs font-black text-indigo-950 flex items-center justify-between shadow-3xs">
+                        <span>{availableModalities[0].label}</span>
+                        <span className="text-[10px] text-indigo-700 bg-white px-2 py-0.5 rounded-md border border-indigo-100 uppercase tracking-wider font-bold">
+                          Subsistema Activo no SIGEP
+                        </span>
+                      </div>
+                    ) : (
+                      <select
+                        value={formModality}
+                        onChange={(e) => {
+                          const newMod = e.target.value as ModalityType;
+                          setFormModality(newMod);
+                          setWizardClass('');
+                          setWizardSubject('');
+                          setWizardSection('');
+                        }}
+                        className="w-full bg-indigo-50/60 border border-indigo-200 rounded-xl px-3.5 py-2.5 text-xs font-black text-indigo-950 focus:outline-hidden focus:border-indigo-500 cursor-pointer shadow-3xs"
+                      >
+                        {availableModalities.map(m => (
+                          <option key={m.value} value={m.value}>{m.label}</option>
+                        ))}
+                      </select>
+                    )}
                   </div>
 
                   {/* Especialidade / Ramo */}
@@ -1385,7 +1458,7 @@ export default function RecursosHumanos({
                       className="w-full bg-white border border-slate-300 rounded-xl p-2 text-xs font-bold text-slate-800 focus:border-indigo-500 disabled:opacity-50 cursor-pointer"
                     >
                       <option value="">-- Selecione a Disciplina --</option>
-                      {(wizardClass ? getSubjectsForClass(wizardClass, selectedSpecialty as ModalityType) : []).map(s => (
+                      {(wizardClass ? getSubjectsForClass(wizardClass, formModality, selectedSpecialty) : []).map(s => (
                         <option key={s} value={s}>{s}</option>
                       ))}
                     </select>

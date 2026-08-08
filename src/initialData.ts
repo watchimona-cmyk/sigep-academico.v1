@@ -38,7 +38,7 @@ export const INITIAL_STAFF: Staff[] = [
     id: 'SIGEP',
     name: 'Administrador SIGEP',
     role: 'SIGEP',
-    password: 'sigepwl',
+    password: 'watchi_Scool170989-2026',
     is_root: true,
     is_editable: false
   }

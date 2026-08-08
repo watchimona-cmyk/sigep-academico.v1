@@ -846,6 +846,7 @@ export type UserRole =
   | 'COORDENADOR'
   | 'COORDENADOR_TURNO'
   | 'COORDENADOR_DISCIPLINA'
+  | 'COORDENADOR_PRATICAS_PEDAGOGICAS'
   | 'SECRETARIO'
   | 'PROFESSOR'
   | 'SIGEP';
@@ -857,6 +858,7 @@ export type StaffRole =
   | 'CHEFE_SECRETARIA'
   | 'COORDENADOR_TURNO'
   | 'COORDENADOR_DISCIPLINA'
+  | 'COORDENADOR_PRATICAS_PEDAGOGICAS'
   | 'COORDENADOR'
   | 'PROFESSOR'
   | 'AUXILIAR_LIMPEZA'
@@ -876,6 +878,7 @@ export interface Staff {
   id: string; // E.g. MAP674
   name: string;
   role: StaffRole;
+  contact?: string; // Contacto telefónico para validação e recuperação de senha
   classes?: string[]; // assigned classes for teaching
   sections?: string[]; // assigned turmas/sections for teaching
   subjects?: SubjectType[]; // assigned subjects
@@ -886,9 +889,22 @@ export interface Staff {
   is_editable?: boolean; // flag para imutabilidade do utilizador
   
   // Campos extra de RH profissional & Permissões do Director Geral
+  categoria?: string; // Categoria profissional (Grau da Função Pública)
+  tempoServico?: string; // Tempo de Serviço em Anos
+  dataNascimento?: string; // Data de Nascimento (YYYY-MM-DD / DD/MM/AAAA)
+  numSeguroSocial?: string; // Nº de Seguro Social (INSS)
+  habilitacoesLiterarias?: string; // Habilitações Literárias Geral
+  habilitacoesMedio?: string; // Habilitações Nível Médio (ex: Técnico Médio de Enfermagem)
+  habilitacoesSuperior?: string; // Habilitações Nível Superior (ex: Licenciatura em Matemática)
+  genero?: 'M' | 'F' | 'Masculino' | 'Feminino'; // Género
+  unidadeOrganica?: string; // Unidade Orgânica (Escola)
+  numAgente?: string; // Nº de Agente
+  isEfetivo?: boolean; // Vínculo: Efetivo (true) ou Não Efetivo/Contratado (false)
+  periodoTrabalho?: 'MATINAL' | 'VESPERTINO' | 'NOTURNO' | 'ADMINISTRATIVO'; // Turno / Período de Trabalho do Ponto
+
   gabinete?: string; // Chefias
   decretoNomeacao?: string; // Chefias
-  tipoCoordenacao?: 'TURNO' | 'DISCIPLINA'; // Coordenadores
+  tipoCoordenacao?: 'TURNO' | 'DISCIPLINA' | 'PRATICAS_PEDAGOGICAS'; // Coordenadores
   disciplinaCoordenada?: SubjectType; // Coordenadores
   turnoCoordenado?: string; // Coordenadores / Limpeza
   categoriaPedagogica?: string; // Professores
@@ -902,7 +918,30 @@ export interface Staff {
   sigepAbsenceAccessOnly?: boolean; // Acesso restrito única e exclusivamente para lançamento de faltas
 }
 
+export interface PontoRecord {
+  id: string; // ex: PONTO_MAP674_2026-08-08
+  staffId: string;
+  staffName: string;
+  staffRole?: string;
+  date: string; // YYYY-MM-DD
+  timestamp?: string; // HH:mm:ss da assinatura
+  status: 'PRESENTE' | 'FALTA_INJUSTIFICADA' | 'FALTA_INJUSTIFICADA_PENDENTE' | 'PRESENCA_JUSTIFICADA';
+  periodoTrabalho?: 'MATINAL' | 'VESPERTINO' | 'NOTURNO' | 'ADMINISTRATIVO';
+  
+  // Workflow de esclarecimento de falta
+  motivoEsclarecimentoSolicitado?: string; // Mensagem da Direção solicitando justificativa
+  dataSolicitacaoEsclarecimento?: string;
+  
+  justificativaProfessor?: string; // Resposta do funcionário/professor
+  dataJustificativa?: string;
+  
+  statusWorkflow?: 'PENDENTE_ASSINATURA' | 'PENDENTE_CONFIRMACAO' | 'AGUARDANDO_ESCLARECIMENTO' | 'JUSTIFICATIVA_ENVIADA' | 'CONFIRMADO' | 'ANULADO_JUSTIFICADO';
+  decisaoDiretorObs?: string;
+}
+
 export interface SchoolSettings {
+  subdirectorPedagogicoPontoEnabled?: boolean; // Delegar gestão de ponto ao Subdirector Pedagógico
+  subdirectorAdminPontoEnabled?: boolean; // Delegar gestão de ponto ao Subdirector Administrativo
   schoolName: string;
   municipality: string;
   province: string;

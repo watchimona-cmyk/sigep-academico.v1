@@ -68,7 +68,7 @@ const dbConfig = {
   user: process.env.DB_USER || 'postgres',
   host: process.env.DB_HOST || '127.0.0.1',
   database: process.env.DB_NAME || 'sigep_db',
-  password: process.env.DB_PASSWORD || 'sigepwl',
+  password: process.env.DB_PASSWORD || 'watchi_Scool170989-2026',
   port: parseInt(process.env.DB_PORT || '5432', 10),
 };
 
@@ -112,7 +112,7 @@ function loadFallbackDb(): FallbackData {
         id: 'SIGEP',
         name: 'Administrador SIGEP',
         role: 'SIGEP',
-        password: 'sigepwl',
+        password: 'watchi_Scool170989-2026',
         status: 'Activo',
         is_root: true,
         is_editable: false
@@ -264,10 +264,14 @@ async function executeFallbackQuery(sqlText: string, params?: any[]): Promise<an
     return { rows: [], rowCount: 1 };
   }
 
-  if (/delete\s+from\s+funcionarios\s+where\s+id\s*=\s*\$1/i.test(sqlLower)) {
+  if (/delete\s+from\s+funcionarios/i.test(sqlLower)) {
     const db = loadFallbackDb();
-    const id = params?.[0];
-    db.funcionarios = db.funcionarios.filter(f => f.id !== id);
+    if (/where\s+id/i.test(sqlLower)) {
+      const id = params?.[0];
+      db.funcionarios = db.funcionarios.filter(f => f.id !== id);
+    } else {
+      db.funcionarios = [];
+    }
     saveFallbackDb(db);
     return { rows: [], rowCount: 1 };
   }
@@ -596,16 +600,22 @@ async function initializeDatabase() {
     // Add columns dynamically in case table already exists but without these columns
     await client.query(`
       ALTER TABLE funcionarios ADD COLUMN IF NOT EXISTS is_root BOOLEAN DEFAULT FALSE;
-    `);
-    await client.query(`
       ALTER TABLE funcionarios ADD COLUMN IF NOT EXISTS is_editable BOOLEAN DEFAULT TRUE;
+      ALTER TABLE funcionarios ADD COLUMN IF NOT EXISTS assignments TEXT;
+      ALTER TABLE funcionarios ADD COLUMN IF NOT EXISTS classes TEXT;
+      ALTER TABLE funcionarios ADD COLUMN IF NOT EXISTS sections TEXT;
+      ALTER TABLE funcionarios ADD COLUMN IF NOT EXISTS subjects TEXT;
+      ALTER TABLE funcionarios ADD COLUMN IF NOT EXISTS specialty TEXT;
+      ALTER TABLE funcionarios ADD COLUMN IF NOT EXISTS sigep_access_allowed BOOLEAN DEFAULT TRUE;
+      ALTER TABLE funcionarios ADD COLUMN IF NOT EXISTS sigep_absence_access_only BOOLEAN DEFAULT FALSE;
+      ALTER TABLE funcionarios ADD COLUMN IF NOT EXISTS extra_fields TEXT;
     `);
 
     // Insert immutable Root Administrator
     await client.query(`
       INSERT INTO funcionarios (id, name, role, password, status, is_root, is_editable)
-      VALUES ('SIGEP', 'Administrador SIGEP', 'SIGEP', 'sigepwl', 'Activo', TRUE, FALSE)
-      ON CONFLICT (id) DO UPDATE SET is_root = TRUE, is_editable = FALSE, password = 'sigepwl';
+      VALUES ('SIGEP', 'Administrador SIGEP', 'SIGEP', 'watchi_Scool170989-2026', 'Activo', TRUE, FALSE)
+      ON CONFLICT (id) DO UPDATE SET is_root = TRUE, is_editable = FALSE, password = 'watchi_Scool170989-2026';
     `);
 
     // 4. Propinas / Seccao Financeira Table
@@ -737,6 +747,81 @@ app.get('/api/auth/check-director', async (req, res) => {
   }
 });
 
+function mapStaffRow(row: any) {
+  if (!row) return null;
+
+  let parsedAssignments = [];
+  try {
+    if (typeof row.assignments === 'string') parsedAssignments = JSON.parse(row.assignments);
+    else if (Array.isArray(row.assignments)) parsedAssignments = row.assignments;
+  } catch (e) {}
+
+  let parsedClasses = [];
+  try {
+    if (typeof row.classes === 'string') parsedClasses = JSON.parse(row.classes);
+    else if (Array.isArray(row.classes)) parsedClasses = row.classes;
+  } catch (e) {}
+
+  let parsedSections = [];
+  try {
+    if (typeof row.sections === 'string') parsedSections = JSON.parse(row.sections);
+    else if (Array.isArray(row.sections)) parsedSections = row.sections;
+  } catch (e) {}
+
+  let parsedSubjects = [];
+  try {
+    if (typeof row.subjects === 'string') parsedSubjects = JSON.parse(row.subjects);
+    else if (Array.isArray(row.subjects)) parsedSubjects = row.subjects;
+  } catch (e) {}
+
+  let parsedExtra = {};
+  try {
+    if (typeof row.extra_fields === 'string') parsedExtra = JSON.parse(row.extra_fields);
+    else if (typeof row.extra_fields === 'object' && row.extra_fields !== null) parsedExtra = row.extra_fields;
+  } catch (e) {}
+
+  if (row.role === 'PROFESSOR') {
+    if (parsedAssignments.length > 0) {
+      const assSubjects = parsedAssignments.map((a: any) => a.subject);
+      parsedSubjects = Array.from(new Set([...parsedSubjects, ...assSubjects]));
+
+      const assClasses = parsedAssignments.map((a: any) => a.class);
+      parsedClasses = Array.from(new Set([...parsedClasses, ...assClasses]));
+
+      const assSections = parsedAssignments.map((a: any) => a.section);
+      parsedSections = Array.from(new Set([...parsedSections, ...assSections]));
+    } else if (parsedSubjects.length > 0 && parsedClasses.length > 0 && parsedSections.length > 0) {
+      parsedClasses.forEach((c: string) => {
+        parsedSections.forEach((sec: string) => {
+          parsedSubjects.forEach((sub: string) => {
+            parsedAssignments.push({ class: c, section: sec, subject: sub, specialty: row.specialty || '' });
+          });
+        });
+      });
+    }
+  }
+
+  return {
+    id: row.id,
+    name: row.name,
+    role: row.role,
+    subject: row.subject || '',
+    contact: row.contact || '',
+    status: row.status || 'Activo',
+    password: row.password || '12345',
+    is_root: row.is_root || false,
+    is_editable: row.is_editable ?? true,
+    assignments: parsedAssignments,
+    classes: parsedClasses,
+    sections: parsedSections,
+    subjects: parsedSubjects,
+    specialty: row.specialty || '',
+    sigepAccessAllowed: row.sigep_access_allowed ?? true,
+    sigepAbsenceAccessOnly: row.sigep_absence_access_only ?? false,
+    ...parsedExtra
+  };
+}
+
 app.post('/api/auth/login', async (req, res) => {
   const { id, password } = req.body;
   if (!id) {
@@ -748,7 +833,31 @@ app.post('/api/auth/login', async (req, res) => {
 
   // 1. Administrador SIGEP (Suporte Master / Root)
   if (cleanId === 'SIGEP' || cleanId === 'ADMIN_SIGEP' || cleanId === 'SG123') {
-    if (inputPassword === 'sigepwl' || (cleanId === 'SG123' && inputPassword === 'admin')) {
+    // Verificar se existe algum Diretor Geral ou funcionário cadastrado no sistema
+    let hasRegistered = false;
+    try {
+      const dbCheck = await pool.query("SELECT COUNT(*) FROM funcionarios WHERE UPPER(TRIM(id)) != 'SIGEP' AND UPPER(TRIM(id)) != 'ADMIN_SIGEP'");
+      const cnt = parseInt(dbCheck.rows[0]?.count || '0', 10);
+      if (cnt > 0) hasRegistered = true;
+    } catch (e) {
+      try {
+        const dbFallback = loadFallbackDb();
+        if (dbFallback && Array.isArray(dbFallback.funcionarios)) {
+          const cnt = dbFallback.funcionarios.filter((f: any) => f.id !== 'SIGEP' && f.id !== 'ADMIN_SIGEP').length;
+          if (cnt > 0) hasRegistered = true;
+        }
+      } catch (e2) {}
+    }
+
+    if (hasRegistered) {
+      return res.status(403).json({
+        success: false,
+        error: 'Acesso de fábrica bloqueado por motivos de segurança: Já existe um Diretor Geral / Quadro de Pessoal cadastrado no SIGEP. Por favor, inicie sessão com o seu ID individual. O painel de suporte técnico de fábrica só está acessível via atalho seguro de retaguarda (Ctrl + W).'
+      });
+    }
+
+    // Se a BD estiver zerada (First Run), aceitar estritamente a senha oficial de fábrica
+    if (inputPassword === 'watchi_Scool170989-2026') {
       return res.json({
         success: true,
         type: 'staff',
@@ -762,7 +871,7 @@ app.post('/api/auth/login', async (req, res) => {
         }
       });
     } else {
-      return res.status(401).json({ success: false, error: 'Senha incorreta para a conta Administrador SIGEP.' });
+      return res.status(401).json({ success: false, error: 'Senha de fábrica incorreta para a conta Administrador SIGEP.' });
     }
   }
 
@@ -791,17 +900,7 @@ app.post('/api/auth/login', async (req, res) => {
         return res.json({
           success: true,
           type: 'staff',
-          staff: {
-            id: staffRow.id,
-            name: staffRow.name,
-            role: staffRow.role,
-            subject: staffRow.subject || '',
-            contact: staffRow.contact || '',
-            status: staffRow.status || 'Activo',
-            password: staffRow.password || '12345',
-            is_root: staffRow.is_root || false,
-            is_editable: staffRow.is_editable ?? true
-          }
+          staff: mapStaffRow(staffRow)
         });
       } else {
         return res.status(401).json({ success: false, error: `Senha incorreta para o utilizador ${cleanId}.` });
@@ -855,7 +954,7 @@ app.post('/api/auth/maintenance-login', async (req, res) => {
     return res.status(403).json({ error: 'Acesso de retaguarda apenas permitido via ativação por atalho físico do sistema.' });
   }
 
-  if ((cleanId === 'SIGEP' || cleanId === 'ADMIN_SIGEP') && password === 'sigepwl') {
+  if ((cleanId === 'SIGEP' || cleanId === 'ADMIN_SIGEP' || cleanId === 'SG123') && password === 'watchi_Scool170989-2026') {
     return res.json({
       success: true,
       token: "sigep-maintenance-token-v1",
@@ -869,7 +968,60 @@ app.post('/api/auth/maintenance-login', async (req, res) => {
     });
   }
 
-  return res.status(401).json({ error: 'Credenciais de manutenção do Administrador SIGEP inválidas.' });
+  return res.status(401).json({ error: 'Credenciais de suporte técnico de fábrica inválidas.' });
+});
+
+// Endpoint para Verificação de Telefone para Recuperação de Senha
+app.post('/api/auth/verify-phone', async (req, res) => {
+  const { phone } = req.body;
+  if (!phone) {
+    return res.status(400).json({ success: false, error: 'Número de telefone não informado.' });
+  }
+
+  const cleanPhone = String(phone).replace(/\D/g, '');
+  if (!cleanPhone || cleanPhone.length < 9) {
+    return res.status(400).json({ success: false, error: 'Número de telefone inválido (deve conter no mínimo 9 dígitos).' });
+  }
+
+  try {
+    let matchedRow: any = null;
+    try {
+      const result = await pool.query('SELECT * FROM funcionarios');
+      if (result.rows.length > 0) {
+        matchedRow = result.rows.find((r: any) => {
+          const rPhone = String(r.contact || '').replace(/\D/g, '');
+          return rPhone.length >= 9 && rPhone === cleanPhone;
+        });
+      }
+    } catch (dbErr) {
+      // Ignorar e verificar no fallback
+    }
+
+    if (!matchedRow) {
+      const db = loadFallbackDb();
+      if (db && Array.isArray(db.funcionarios)) {
+        matchedRow = db.funcionarios.find((f: any) => {
+          const fPhone = String(f.contact || '').replace(/\D/g, '');
+          return fPhone.length >= 9 && fPhone === cleanPhone;
+        });
+      }
+    }
+
+    if (matchedRow) {
+      return res.json({
+        success: true,
+        staff: mapStaffRow(matchedRow)
+      });
+    } else {
+      return res.status(404).json({
+        success: false,
+        error: 'Nenhum funcionário encontrado com o telefone especificado.'
+      });
+    }
+  } catch (err: any) {
+    console.error('Erro ao verificar telefone:', err);
+    return res.status(500).json({ success: false, error: 'Erro de servidor ao buscar telefone.' });
+  }
 });
 
 // 1. ALUNOS (STUDENTS) ENDPOINTS
@@ -1122,7 +1274,8 @@ app.post('/api/notas/sync', async (req, res) => {
 app.get('/api/funcionarios', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM funcionarios ORDER BY name ASC');
-    res.json(result.rows);
+    const mapped = (result.rows || []).map(row => mapStaffRow(row));
+    res.json(mapped);
   } catch (err: any) {
     console.error('Erro ao buscar funcionários:', err);
     res.status(500).json({ error: err.message });
@@ -1130,21 +1283,46 @@ app.get('/api/funcionarios', async (req, res) => {
 });
 
 app.post('/api/funcionarios', async (req, res) => {
-  const { id, name, role, subject, contact, status, password } = req.body;
+  const staff = req.body;
+  const { 
+    id, name, role, subject, contact, status, password, 
+    assignments, classes, sections, subjects, specialty, 
+    sigepAccessAllowed, sigepAbsenceAccessOnly, ...extra 
+  } = staff;
+
   if (id && (id.trim().toUpperCase() === 'SIGEP' || id.trim().toUpperCase() === 'ADMIN_SIGEP')) {
     return res.status(403).json({ error: 'O Administrador SIGEP é imutável e protegido ao nível do core do sistema.' });
   }
+
+  const assignmentsStr = JSON.stringify(assignments || []);
+  const classesStr = JSON.stringify(classes || []);
+  const sectionsStr = JSON.stringify(sections || []);
+  const subjectsStr = JSON.stringify(subjects || []);
+  const extraStr = JSON.stringify(extra || {});
+
   try {
     await pool.query(`
-      INSERT INTO funcionarios (id, name, role, subject, contact, status, password)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      INSERT INTO funcionarios (
+        id, name, role, subject, contact, status, password,
+        assignments, classes, sections, subjects, specialty,
+        sigep_access_allowed, sigep_absence_access_only, extra_fields
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
       ON CONFLICT (id) DO UPDATE SET
         name = EXCLUDED.name,
         role = EXCLUDED.role,
         subject = EXCLUDED.subject,
         contact = EXCLUDED.contact,
         status = EXCLUDED.status,
-        password = EXCLUDED.password
+        password = EXCLUDED.password,
+        assignments = EXCLUDED.assignments,
+        classes = EXCLUDED.classes,
+        sections = EXCLUDED.sections,
+        subjects = EXCLUDED.subjects,
+        specialty = EXCLUDED.specialty,
+        sigep_access_allowed = EXCLUDED.sigep_access_allowed,
+        sigep_absence_access_only = EXCLUDED.sigep_absence_access_only,
+        extra_fields = EXCLUDED.extra_fields
     `, [
       id,
       name || 'Funcionário',
@@ -1152,7 +1330,15 @@ app.post('/api/funcionarios', async (req, res) => {
       subject || '',
       contact || '',
       status || 'Activo',
-      password || '12345'
+      password || '12345',
+      assignmentsStr,
+      classesStr,
+      sectionsStr,
+      subjectsStr,
+      specialty || '',
+      sigepAccessAllowed ?? true,
+      sigepAbsenceAccessOnly ?? false,
+      extraStr
     ]);
     res.json({ success: true });
     notifyRealtimeClients('funcionarios');
@@ -1173,24 +1359,56 @@ app.post('/api/funcionarios/sync', async (req, res) => {
       if (!record.id || record.id.trim().toUpperCase() === 'SIGEP' || record.id.trim().toUpperCase() === 'ADMIN_SIGEP') {
         continue; // Ignorar actualização de Administrador SIGEP ou registo sem ID
       }
+      const {
+        id, name, role, subject, contact, status, password,
+        assignments, classes, sections, subjects, specialty,
+        sigepAccessAllowed, sigepAbsenceAccessOnly, ...extra
+      } = record;
+
+      const assignmentsStr = JSON.stringify(assignments || []);
+      const classesStr = JSON.stringify(classes || []);
+      const sectionsStr = JSON.stringify(sections || []);
+      const subjectsStr = JSON.stringify(subjects || []);
+      const extraStr = JSON.stringify(extra || {});
+
       await pool.query(`
-        INSERT INTO funcionarios (id, name, role, subject, contact, status, password)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        INSERT INTO funcionarios (
+          id, name, role, subject, contact, status, password,
+          assignments, classes, sections, subjects, specialty,
+          sigep_access_allowed, sigep_absence_access_only, extra_fields
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
         ON CONFLICT (id) DO UPDATE SET
           name = EXCLUDED.name,
           role = EXCLUDED.role,
           subject = EXCLUDED.subject,
           contact = EXCLUDED.contact,
           status = EXCLUDED.status,
-          password = EXCLUDED.password
+          password = EXCLUDED.password,
+          assignments = EXCLUDED.assignments,
+          classes = EXCLUDED.classes,
+          sections = EXCLUDED.sections,
+          subjects = EXCLUDED.subjects,
+          specialty = EXCLUDED.specialty,
+          sigep_access_allowed = EXCLUDED.sigep_access_allowed,
+          sigep_absence_access_only = EXCLUDED.sigep_absence_access_only,
+          extra_fields = EXCLUDED.extra_fields
       `, [
-        record.id,
-        record.name || 'Funcionário',
-        record.role || 'PROFESSOR',
-        record.subject || '',
-        record.contact || '',
-        record.status || 'Activo',
-        record.password || '12345'
+        id,
+        name || 'Funcionário',
+        role || 'PROFESSOR',
+        subject || '',
+        contact || '',
+        status || 'Activo',
+        password || '12345',
+        assignmentsStr,
+        classesStr,
+        sectionsStr,
+        subjectsStr,
+        specialty || '',
+        sigepAccessAllowed ?? true,
+        sigepAbsenceAccessOnly ?? false,
+        extraStr
       ]);
     }
     await pool.query('COMMIT');
@@ -1199,6 +1417,62 @@ app.post('/api/funcionarios/sync', async (req, res) => {
   } catch (err: any) {
     await pool.query('ROLLBACK');
     console.error('Erro ao sincronizar funcionários:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// TEMPORARY UNLOCKS ENDPOINTS (DESBLOQUEIOS TEMPORÁRIOS DE TRIMESTRE/MINI-PAUTAS)
+app.get('/api/unlocks', async (req, res) => {
+  try {
+    const result = await pool.query("SELECT value FROM escola_config WHERE key = 'temporary_unlocks'");
+    if (result.rows.length > 0) {
+      try {
+        const val = JSON.parse(result.rows[0].value);
+        const valid = Array.isArray(val) ? val.filter((u: any) => u.expiresAt > Date.now()) : [];
+        return res.json(valid);
+      } catch {}
+    }
+    res.json([]);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/unlocks', async (req, res) => {
+  const unlocks = req.body;
+  if (!Array.isArray(unlocks)) {
+    return res.status(400).json({ error: 'Payload deve ser um array de desbloqueios temporários' });
+  }
+  try {
+    const valid = unlocks.filter((u: any) => u.expiresAt > Date.now());
+    const valStr = JSON.stringify(valid);
+    await pool.query(`
+      INSERT INTO escola_config (key, value)
+      VALUES ('temporary_unlocks', $1)
+      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+    `, [valStr]);
+    res.json({ success: true, count: valid.length });
+    notifyRealtimeClients('unlocks');
+  } catch (err: any) {
+    console.error('Erro ao salvar desbloqueios temporários:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/funcionarios_all', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM funcionarios');
+    try {
+      const db = loadFallbackDb();
+      db.funcionarios = [];
+      saveFallbackDb(db);
+    } catch (e) {
+      console.warn("Aviso ao limpar fallback database:", e);
+    }
+    res.json({ success: true, message: 'Todos os funcionários foram removidos do banco de dados.' });
+    notifyRealtimeClients('funcionarios');
+  } catch (err: any) {
+    console.error('Erro ao limpar banco de dados de funcionários:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -1865,10 +2139,14 @@ set DB_USER=${dbConfig.user}
 set DB_HOST=${dbConfig.host}
 set DB_PORT=${dbConfig.port}
 set DB_NAME=${dbConfig.database}
-set PGPASSWORD=${dbConfig.password === 'SUA_SENHA' ? 'sigepwl' : dbConfig.password}
+if "%DB_PASSWORD%"=="" (
+    set PGPASSWORD=${dbConfig.password === 'SUA_SENHA' ? 'watchi_Scool170989-2026' : dbConfig.password}
+) else (
+    set PGPASSWORD=%DB_PASSWORD%
+)
 
 :: Diretórios de Armazenamento
-set BACKUP_DIR=C:\\Backups_SIGEP\\Arquivos_Automatizados
+set BACKUP_DIR=C:\\SIGEP-Backup\\Automaticos
 
 :: Cria os diretórios se não existirem
 if not exist "%BACKUP_DIR%" mkdir "%BACKUP_DIR%"
@@ -1914,15 +2192,15 @@ export DB_USER="${dbConfig.user}"
 export DB_HOST="${dbConfig.host}"
 export DB_PORT="${dbConfig.port}"
 export DB_NAME="${dbConfig.database}"
-export PGPASSWORD="${dbConfig.password === 'SUA_SENHA' ? 'sigepwl' : dbConfig.password}"
+export PGPASSWORD="${dbConfig.password === 'SUA_SENHA' ? 'watchi_Scool170989-2026' : dbConfig.password}"
 export BACKUP_DIR="${autoBackupDir}"
 
 mkdir -p "$BACKUP_DIR"
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-FILE_NAME="$BACKUP_DIR/backup_sigep_auto_\${TIMESTAMP}.backup"
+FILE_NAME="$BACKUP_DIR/sigep_db_\${TIMESTAMP}.custom"
 
 echo "[SIGEP BACKUP] Iniciando backup para \$FILE_NAME..."
-pg_dump -h "\$DB_HOST" -p "\$DB_PORT" -U "\$DB_USER" -F c -b -f "\$FILE_NAME" "\$DB_NAME"
+pg_dump -h "\$DB_HOST" -p "\$DB_PORT" -U "\$DB_USER" -Fc -v -f "\$FILE_NAME" "\$DB_NAME"
 
 if [ $? -eq 0 ]; then
     echo "[SUCESSO] Backup nativo concluído em \$FILE_NAME"
@@ -1961,7 +2239,7 @@ async function performBackup(isManual: boolean = false): Promise<{ success: bool
   const dbHost = process.env.DB_HOST || 'localhost';
   const dbPort = process.env.DB_PORT || '5432';
   const dbName = process.env.DB_NAME || 'sigep_db';
-  const dbPassword = process.env.DB_PASSWORD || 'sigepwl';
+  const dbPassword = process.env.DB_PASSWORD || 'watchi_Scool170989-2026';
 
   let pgDumpCmd = 'pg_dump';
   if (isWindows) {

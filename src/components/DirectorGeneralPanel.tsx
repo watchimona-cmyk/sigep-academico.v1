@@ -645,7 +645,7 @@ export default function DirectorGeneralPanel({
                 className={`px-3 py-2 rounded-lg text-[10px] font-bold transition-all cursor-pointer flex items-center gap-1 shrink-0 ${activeRHReviewTab === 'COORDENACAO' ? 'bg-white text-teal-700 shadow-xs font-extrabold' : 'text-slate-500 hover:text-slate-850'}`}
               >
                 <Award className="w-3.5 h-3.5 text-teal-500" />
-                <span>Coordenação ({staffList.filter(s => ['COORDENADOR_TURNO', 'COORDENADOR_DISCIPLINA'].includes(s.role)).length})</span>
+                <span>Coordenação ({staffList.filter(s => ['COORDENADOR_TURNO', 'COORDENADOR_DISCIPLINA', 'COORDENADOR_PRATICAS_PEDAGOGICAS', 'COORDENADOR'].includes(s.role)).length})</span>
               </button>
               <button
                 type="button"
@@ -684,6 +684,7 @@ export default function DirectorGeneralPanel({
                   COORDENADOR: 'Coordenador',
                   COORDENADOR_TURNO: 'Coordenador de Turno',
                   COORDENADOR_DISCIPLINA: 'Coordenador de Disciplina',
+                  COORDENADOR_PRATICAS_PEDAGOGICAS: 'Coordenador de Práticas Pedagógicas',
                   PROFESSOR: 'Professor de Disciplina',
                   AUXILIAR_LIMPEZA: 'Auxiliar de Limpeza',
                   SEGURANCA: 'Segurança / Vigilante',
@@ -697,7 +698,7 @@ export default function DirectorGeneralPanel({
                     return staffList.filter(s => ['DIRECTOR_GERAL', 'SUB_DIRECTOR_PEDAGOGICO', 'SUB_DIRECTOR_ADMINISTRATIVO', 'CHEFE_SECRETARIA', 'TECNICO_PEDAGOGICO', 'TECNICO_ADMINISTRATIVO'].includes(s.role));
                   }
                   if (activeRHReviewTab === 'COORDENACAO') {
-                    return staffList.filter(s => ['COORDENADOR_TURNO', 'COORDENADOR_DISCIPLINA'].includes(s.role));
+                    return staffList.filter(s => ['COORDENADOR_TURNO', 'COORDENADOR_DISCIPLINA', 'COORDENADOR_PRATICAS_PEDAGOGICAS', 'COORDENADOR'].includes(s.role));
                   }
                   if (activeRHReviewTab === 'PROFESSORES') {
                     return staffList.filter(s => s.role === 'PROFESSOR');
@@ -1253,22 +1254,19 @@ export default function DirectorGeneralPanel({
                 </p>
                 <ol className="space-y-1.5 list-decimal list-inside pl-1 text-[9.5px] leading-relaxed font-medium">
                   <li>
-                    Insira a pendrive e localize o ficheiro de backup (<code className="text-emerald-400 font-mono">.backup</code>) na pasta <code className="text-emerald-400 font-mono">Arquivos_Automatizados</code>.
+                    Insira a pendrive e localize o ficheiro de backup (<code className="text-emerald-400 font-mono">.custom</code> ou <code className="text-emerald-400 font-mono">.backup</code>) na pasta <code className="text-emerald-400 font-mono">C:\SIGEP-Backup\Automaticos</code> ou na Pendrive.
                   </li>
                   <li>
                     Abra a <span className="text-indigo-300 font-semibold">Linha de Comandos (CMD)</span> do Windows como <b>Administrador</b>.
                   </li>
                   <li>
-                    Defina a palavra-passe de autenticação executando:
-                    <pre className="bg-slate-950 p-2 rounded mt-1 font-mono text-[8.5px] text-indigo-200 border border-slate-800 select-all overflow-x-auto">
-                      set PGPASSWORD=sigepwl
+                    Execute o comando de restauro direto em modo interativo (o PostgreSQL solicitará a senha de forma segura no terminal):
+                    <pre className="bg-slate-950 p-2 rounded mt-1 font-mono text-[8.5px] text-indigo-200 border border-slate-800 select-all overflow-x-auto whitespace-pre-wrap break-all leading-normal">
+                      pg_restore -h localhost -p 5432 -U postgres -d sigep_db -v -c "C:\SIGEP-Backup\Automaticos\NOME_DO_FICHEIRO.custom"
                     </pre>
                   </li>
                   <li>
-                    Execute o comando nativo de restauro (substituindo o nome do ficheiro):
-                    <pre className="bg-slate-950 p-2 rounded mt-1 font-mono text-[8.5px] text-indigo-200 border border-slate-800 select-all overflow-x-auto whitespace-pre-wrap break-all leading-normal">
-                      pg_restore -h localhost -p 5432 -U postgres -d sigep_db -v -c "C:\Backups_SIGEP\Arquivos_Automatizados\NOME_DO_FICHEIRO.backup"
-                    </pre>
+                    Introduza a senha mestra quando solicitada no terminal (<code className="text-slate-300 font-mono">watchi_Scool170989-2026</code>).
                   </li>
                 </ol>
                 <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-850 text-[8px] leading-relaxed text-slate-400 font-semibold">

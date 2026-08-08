@@ -7,7 +7,7 @@ import React, { useState } from 'react';
 import { Student, UserRole, Staff, ModalityType } from '../types';
 import { formatarNomeProprio } from '../utils/pautaLogic';
 import { PlusCircle, Search, Trash2, UserPlus, Filter, Hash, ChevronDown, ChevronUp, User, Phone, MapPin, Calendar, FileText, RefreshCw, Edit, X } from 'lucide-react';
-import { generateStudentId } from '../utils';
+import { generateStudentId, isStudentVisibleForProfessor, getProfessorAllowedClasses, getProfessorAllowedSections } from '../utils';
 import BiSectorSelect from './BiSectorSelect';
 
 const LOCALIDADES_ANGOLA: { [key: string]: string[] } = {
@@ -534,11 +534,9 @@ export default function StudentDirectory({
   }, [newName, newClass, newSection, isAdding, editingStudentId]);
 
   const filteredStudents = students.filter(student => {
-    // If professor, they can only view students of classes and sections they are assigned to
+    // If professor, they can only view students of classes, sections and subjects assigned to their ID
     if (loggedInStaff && loggedInStaff.role === 'PROFESSOR') {
-      const assignedClasses = loggedInStaff.classes || [];
-      const assignedSections = loggedInStaff.sections || [];
-      if (!assignedClasses.includes(student.class) || !assignedSections.includes(student.section)) {
+      if (!isStudentVisibleForProfessor(student, loggedInStaff)) {
         return false;
       }
     }
@@ -1646,7 +1644,7 @@ export default function StudentDirectory({
             <option value="All">
               {loggedInStaff && loggedInStaff.role === 'PROFESSOR' ? 'Todas Minhas Classes' : 'Todas as Classes'}
             </option>
-            {(loggedInStaff && loggedInStaff.role === 'PROFESSOR' ? (loggedInStaff.classes || []) : classes).map(cl => (
+            {(loggedInStaff && loggedInStaff.role === 'PROFESSOR' ? getProfessorAllowedClasses(loggedInStaff, classes) : classes).map(cl => (
               <option key={cl} value={cl}>{cl}ª</option>
             ))}
           </select>
@@ -1659,7 +1657,7 @@ export default function StudentDirectory({
             <option value="All">
               {loggedInStaff && loggedInStaff.role === 'PROFESSOR' ? 'Todas Minhas Turmas' : 'Todas as Turmas'}
             </option>
-            {(loggedInStaff && loggedInStaff.role === 'PROFESSOR' ? (loggedInStaff.sections || []) : sections).map(sec => (
+            {(loggedInStaff && loggedInStaff.role === 'PROFESSOR' ? getProfessorAllowedSections(loggedInStaff, selectedClass === 'All' ? '' : selectedClass, sections) : sections).map(sec => (
               <option key={sec} value={sec}>Turma {sec}</option>
             ))}
           </select>

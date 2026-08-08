@@ -15,7 +15,7 @@ import {
 import { Student, GradeRow, SchoolSettings, Staff, UserRole } from '../types';
 import PautaAnnual from './PautaAnnual';
 import PautaTrimester from './PautaTrimester';
-import { getSectionsList } from '../utils';
+import { getSectionsList, getProfessorAllowedClasses, getProfessorAllowedSections } from '../utils';
 
 interface PainelPautasProps {
   students: Student[];
@@ -140,11 +140,11 @@ export default function PainelPautas({
 
   // Handle staff restrictions
   const filteredClasses = loggedInStaff && loggedInStaff.role === 'PROFESSOR'
-    ? (loggedInStaff.classes && loggedInStaff.classes.length > 0 ? loggedInStaff.classes : getClassesForSelection())
+    ? getProfessorAllowedClasses(loggedInStaff, getClassesForSelection())
     : getClassesForSelection();
 
   const filteredSections = loggedInStaff && loggedInStaff.role === 'PROFESSOR'
-    ? (loggedInStaff.sections && loggedInStaff.sections.length > 0 ? loggedInStaff.sections : getSectionsForSelection())
+    ? getProfessorAllowedSections(loggedInStaff, localClass, getSectionsForSelection())
     : getSectionsForSelection();
 
   // Apply selected parameters to App state and enter the sheet view

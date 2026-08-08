@@ -342,98 +342,74 @@ export default function UserSection({
 
           {/* Active Assignments Info for Registered Staff */}
           {loggedInStaff && loggedInStaff.role === 'PROFESSOR' && (() => {
-            const sections = loggedInStaff.sections || [];
-            const subjects = loggedInStaff.subjects || [];
-            const mainSpecialty = loggedInStaff.specialty || '';
-            const grelha = carregarGrelhaCurricular();
+            const rawAssignments = loggedInStaff.assignments || [];
+            const activeSub = schoolSettings.officialSubsystem || 'SECUNDARIO_PEDAGOGICO';
+            const activeMod = activeSub === 'PRIMARIO_I_CICLO' ? 'ENSINO_PRIMARIO' : activeSub === 'SECUNDARIO_GERAL' ? 'PUNIV' : 'MAGISTERIO';
 
-            // Especialidades estritamente associadas ao perfil do professor conforme cadastrado no RH
-            const specSet = new Set<string>();
-            if (mainSpecialty && mainSpecialty !== 'GERAL') {
-              specSet.add(mainSpecialty);
+            // Filter assignments that match active subsystem classes/modality
+            let myAssignments = rawAssignments;
+            if (myAssignments.length === 0 && (loggedInStaff.classes || []).length > 0) {
+              // Reconstruct assignments if only classes/sections/subjects were stored
+              const rebuilt: { class: string; section: string; subject: string; specialty?: string }[] = [];
+              (loggedInStaff.classes || []).forEach(c => {
+                (loggedInStaff.sections || []).forEach(sec => {
+                  (loggedInStaff.subjects || []).forEach(sub => {
+                    rebuilt.push({ class: c, section: sec, subject: sub, specialty: loggedInStaff.specialty });
+                  });
+                });
+              });
+              myAssignments = rebuilt;
             }
 
-            sections.forEach(sec => {
-              const spec = getSpecialtyFromSection(sec);
-              if (spec) specSet.add(spec);
-            });
+            // Filter by active modality class range
+            const validClassForModality = (cls: string) => {
+              const cNum = parseInt(cls) || 0;
+              if (activeMod === 'ENSINO_PRIMARIO') return cNum >= 1 && cNum <= 9;
+              return cNum >= 10 && cNum <= 13;
+            };
 
-            if (specSet.size === 0) {
-              specSet.add(mainSpecialty || 'GERAL');
-            }
-
-            const specList = Array.from(specSet);
-
-            // Agrupar turmas e disciplinas por especialidade
-            const groups = specList.map(specCode => {
-              const specSections = sections.filter(sec => {
-                const sSpec = getSpecialtyFromSection(sec);
-                return sSpec === specCode || (!sSpec && (specCode === mainSpecialty || specCode === 'GERAL'));
-              });
-              
-              const specSubjects = subjects.filter(subj => {
-                const matchedItems = grelha.filter(i => i.subject === subj);
-                if (matchedItems.length === 0) return true;
-                return matchedItems.some(i => i.specialty === specCode || !i.specialty || specCode === 'GERAL');
-              });
-
-              return {
-                specCode,
-                specName: getSpecialtyFullName(specCode),
-                sections: specSections.length > 0 ? specSections : (specCode === mainSpecialty ? sections : []),
-                subjects: specSubjects
-              };
-            });
-
-            const finalGroups = groups;
+            const filteredAssignments = myAssignments.filter(a => validClassForModality(a.class));
 
             return (
               <div className="p-4 bg-indigo-50/60 rounded-xl border border-indigo-100 space-y-3 text-xs">
                 <div className="font-extrabold text-indigo-950 flex items-center justify-between border-b border-indigo-100 pb-2">
                   <div className="flex items-center gap-1.5">
                     <BookOpen className="w-4 h-4 text-indigo-600" />
-                    <span>Atribuições Curriculares do Professor</span>
+                    <span>Atribuições do Professor ({loggedInStaff.id})</span>
                   </div>
                   <span className="text-[10px] text-indigo-700 bg-white px-2 py-0.5 rounded-md font-mono font-bold border border-indigo-100">
-                    {finalGroups.length} Especialidade(s)
+                    {filteredAssignments.length} Atribuição(ões)
                   </span>
                 </div>
 
-                {/* Overall Classes */}
                 <div className="bg-white/80 p-2.5 rounded-lg border border-indigo-100 text-[11px] flex items-center justify-between">
-                  <span className="text-slate-500 font-medium">Classes Lecionadas (Geral):</span>
-                  <span className="text-slate-900 font-extrabold">{loggedInStaff.classes?.map(c => `${c}ª`).join(', ') || 'Nenhuma'}</span>
+                  <span className="text-slate-500 font-medium">Subsistema Activo no Ecossistema:</span>
+                  <span className="text-indigo-950 font-black">
+                    {activeMod === 'ENSINO_PRIMARIO' ? 'Ensino Primário' : activeMod === 'PUNIV' ? 'Ensino Geral (PUNIV)' : 'Magistério / Técnico-Pedagógico'}
+                  </span>
                 </div>
 
-                {/* Mirrored breakdown per Specialty */}
-                <div className="space-y-2.5">
-                  {finalGroups.map(group => (
-                    <div key={group.specCode} className="bg-white/90 p-3 rounded-xl border border-indigo-150 space-y-2 shadow-2xs">
-                      <div className="flex items-center justify-between border-b border-indigo-100 pb-1.5">
-                        <span className="text-[10px] text-indigo-700 font-mono font-bold uppercase tracking-wider">
-                          Especialidade / Ramo:
-                        </span>
-                        <span className="text-xs font-black text-indigo-950">
-                          {group.specName} ({group.specCode})
-                        </span>
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
+                {filteredAssignments.length === 0 ? (
+                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-[11px] text-amber-800 font-medium">
+                    Nenhuma atribuição curricular associada ao seu ID no subsistema activo ({activeMod}).
+                  </div>
+                ) : (
+                  <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                    {filteredAssignments.map((ass, idx) => (
+                      <div key={idx} className="bg-white p-2.5 rounded-lg border border-indigo-150 text-[11px] flex items-center justify-between shadow-2xs">
                         <div>
-                          <span className="text-slate-400 block font-medium">Turmas Atribuídas:</span>
-                          <span className="text-emerald-700 font-extrabold">
-                            {group.sections.length > 0 ? group.sections.join(', ') : (sections.join(', ') || 'Nenhuma')}
-                          </span>
+                          <span className="font-extrabold text-indigo-900">{ass.class}ª Classe • Turma {ass.section}</span>
+                          <span className="block text-[10.5px] text-slate-700 font-bold">{ass.subject}</span>
                         </div>
-                        <div>
-                          <span className="text-slate-400 block font-medium">Disciplinas Autorizadas:</span>
-                          <span className="text-indigo-900 font-extrabold">
-                            {group.subjects.length > 0 ? group.subjects.join(', ') : (subjects.join(', ') || 'Nenhuma')}
+                        {ass.specialty && ass.specialty !== 'GERAL' && (
+                          <span className="text-[9.5px] font-mono font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-100 shrink-0">
+                            {ass.specialty}
                           </span>
-                        </div>
+                        )}
                       </div>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                )}
               </div>
             );
           })()}

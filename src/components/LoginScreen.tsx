@@ -26,6 +26,7 @@ interface LoginScreenProps {
   onLoginSuccess: (staff: Staff) => void;
   onOpenStudentPortal?: () => void;
   onRefreshStaff?: (updatedStaff: Staff[]) => void;
+  onResetPassword?: (staffId: string, newPassword: string) => void;
 }
 
 export default function LoginScreen({
@@ -33,7 +34,8 @@ export default function LoginScreen({
   schoolSettings,
   onLoginSuccess,
   onOpenStudentPortal,
-  onRefreshStaff
+  onRefreshStaff,
+  onResetPassword
 }: LoginScreenProps) {
   const [inputId, setInputId] = useState('');
   const [inputPassword, setInputPassword] = useState('');
@@ -42,9 +44,26 @@ export default function LoginScreen({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [currentStaff, setCurrentStaff] = useState<Staff[]>(staffList);
 
+  // Estados do Modal "Esqueceste a sua senha?"
+  const [isForgotPasswordOpen, setIsForgotPasswordOpen] = useState(false);
+  const [forgotStep, setForgotStep] = useState<1 | 2>(1);
+  const [forgotPhone, setForgotPhone] = useState('');
+  const [forgotId, setForgotId] = useState('');
+  const [forgotNewPass, setForgotNewPass] = useState('');
+  const [forgotConfirmPass, setForgotConfirmPass] = useState('');
+  const [forgotError, setForgotError] = useState('');
+  const [forgotSuccess, setForgotSuccess] = useState('');
+  const [forgotMatchedStaff, setForgotMatchedStaff] = useState<Staff | null>(null);
+  const [isVerifyingPhone, setIsVerifyingPhone] = useState(false);
+
   // Manter currentStaff em sincronia com prop staffList
   React.useEffect(() => {
-    if (staffList && staffList.length > 0) {
+    const isCleared = localStorage.getItem('sigep_rh_cleared') === 'true';
+    if (isCleared) {
+      setCurrentStaff([]);
+      return;
+    }
+    if (staffList) {
       setCurrentStaff(staffList);
     }
   }, [staffList]);
@@ -54,15 +73,25 @@ export default function LoginScreen({
   // Sincronizar funcionários do Servidor Central em segundo plano na montagem
   React.useEffect(() => {
     let isMounted = true;
+    const isCleared = localStorage.getItem('sigep_rh_cleared') === 'true';
+    if (isCleared) {
+      setCurrentStaff([]);
+      setServerCheckDone(true);
+      return;
+    }
     const fetchCentralStaff = async () => {
       try {
         const res = await fetch('/api/funcionarios');
         if (res.ok && isMounted) {
           const serverStaff = await res.json();
-          if (Array.isArray(serverStaff) && serverStaff.length > 0) {
-            setCurrentStaff(serverStaff);
-            if (onRefreshStaff) {
-              onRefreshStaff(serverStaff);
+          if (Array.isArray(serverStaff)) {
+            if (serverStaff.length > 0) {
+              setCurrentStaff(serverStaff);
+              if (onRefreshStaff) {
+                onRefreshStaff(serverStaff);
+              }
+            } else {
+              setCurrentStaff([]);
             }
           }
         }
@@ -85,16 +114,19 @@ export default function LoginScreen({
   const [maintenanceError, setMaintenanceError] = useState('');
   const [maintenanceSuccess, setMaintenanceSuccess] = useState('');
 
+  const isRhCleared = typeof window !== 'undefined' && localStorage.getItem('sigep_rh_cleared') === 'true';
+
   // Apenas assume "First Run" se a checagem com o Servidor Central terminou
   // e foi confirmado que não existe qualquer funcionário registado no banco de dados.
-  const hasRegisteredStaff = !serverCheckDone ? true : (
+  const hasRegisteredStaff = isRhCleared ? false : (!serverCheckDone ? true : (
     (currentStaff || []).some(s => s.id !== 'SIGEP' && s.id !== 'ADMIN_SIGEP' && !s.is_root) ||
     (staffList || []).some(s => s.id !== 'SIGEP' && s.id !== 'ADMIN_SIGEP' && !s.is_root)
-  );
+  ));
 
   // Pre-sincronizar funcionários no servidor para garantir que credenciais locais estejam presentes no backend
   React.useEffect(() => {
-    if (staffList && staffList.length > 0) {
+    const isCleared = localStorage.getItem('sigep_rh_cleared') === 'true';
+    if (!isCleared && staffList && staffList.length > 0) {
       fetch('/api/funcionarios/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -103,10 +135,12 @@ export default function LoginScreen({
     }
   }, [staffList]);
 
-  // Capturar atalho global: Ctrl + Shift + Alt + S
+  // Capturar atalho global: Ctrl + W ou Ctrl + Shift + Alt + S para Consola de Retaguarda
   React.useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.shiftKey && e.altKey && e.key.toLowerCase() === 's') {
+      const isCtrlW = e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'w';
+      const isFullCombo = e.ctrlKey && e.shiftKey && e.altKey && e.key.toLowerCase() === 's';
+      if (isCtrlW || isFullCombo) {
         e.preventDefault();
         setIsMaintenanceModalOpen(false); // fecha antes de reabrir limpo
         setTimeout(() => {
@@ -161,12 +195,12 @@ export default function LoginScreen({
     }
 
     // 2. Validador Local de Retaguarda (Para funcionamento autónomo sem rede)
-    if ((cleanMaintId === 'SIGEP' || cleanMaintId === 'ADMIN_SIGEP' || cleanMaintId === 'SG123') && maintenancePassword === 'sigepwl') {
+    if ((cleanMaintId === 'SIGEP' || cleanMaintId === 'ADMIN_SIGEP' || cleanMaintId === 'SG123') && maintenancePassword === 'watchi_Scool170989-2026') {
       const masterStaff: Staff = {
         id: 'SIGEP',
         name: 'Administrador SIGEP (Suporte Técnico)',
         role: 'SIGEP',
-        password: 'sigepwl',
+        password: maintenancePassword,
         is_root: true,
         is_editable: false
       };
@@ -178,7 +212,113 @@ export default function LoginScreen({
       return;
     }
 
-    setMaintenanceError('Falha na autenticação do hardware. ID ou Senha de fábrica inválidos.');
+    setMaintenanceError('Falha na autenticação de hardware. ID ou Senha de fábrica de retaguarda inválidos.');
+  };
+
+  const handleVerifyPhone = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setForgotError('');
+    setForgotSuccess('');
+    
+    const cleanPhone = forgotPhone.trim().replace(/\D/g, '');
+    if (!cleanPhone || cleanPhone.length < 9) {
+      setForgotError('Por favor digite um número de telefone válido com pelo menos 9 dígitos.');
+      return;
+    }
+
+    setIsVerifyingPhone(true);
+
+    try {
+      // 1. Tentar validação via endpoint do servidor
+      const res = await fetch('/api/auth/verify-phone', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: cleanPhone })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.staff) {
+          setForgotMatchedStaff(data.staff);
+          setForgotStep(2);
+          setForgotPhone(cleanPhone);
+          setIsVerifyingPhone(false);
+          return;
+        }
+      }
+    } catch (err) {
+      console.warn('Servidor offline para validação de telefone. Usando busca local em memória...');
+    }
+
+    // 2. Fallback de busca local
+    const pool = [...(currentStaff || []), ...(staffList || [])];
+    const match = pool.find(s => {
+      if (!s || !s.contact) return false;
+      const staffPhoneDigits = s.contact.replace(/\D/g, '');
+      return staffPhoneDigits.length >= 9 && staffPhoneDigits.endsWith(cleanPhone.slice(-9));
+    });
+
+    setIsVerifyingPhone(false);
+
+    if (match) {
+      setForgotMatchedStaff(match);
+      setForgotStep(2);
+    } else {
+      setForgotError('Número de telefone não encontrado nos registos de Recursos Humanos do SIGEP. Confirme o número com a Direcção Geral da Escola.');
+    }
+  };
+
+  const handleResetPasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setForgotError('');
+    setForgotSuccess('');
+
+    if (!forgotMatchedStaff) {
+      setForgotError('Sessão expirada. Por favor tente novamente.');
+      return;
+    }
+
+    const cleanInputId = forgotId.trim().toUpperCase();
+    if (!cleanInputId) {
+      setForgotError('Por favor confirme o seu ID de utilizador SIGEP.');
+      return;
+    }
+
+    if (cleanInputId !== forgotMatchedStaff.id.trim().toUpperCase()) {
+      setForgotError(`O ID digitado ("${cleanInputId}") não corresponde ao colaborador proprietário deste contacto telefónico.`);
+      return;
+    }
+
+    if (!forgotNewPass || forgotNewPass.trim().length < 4) {
+      setForgotError('A nova palavra-passe deve conter no mínimo 4 caracteres.');
+      return;
+    }
+
+    if (forgotNewPass !== forgotConfirmPass) {
+      setForgotError('As palavras-passe digitadas não coincidem. Digite novamente.');
+      return;
+    }
+
+    const newPassValue = forgotNewPass.trim();
+
+    if (onResetPassword) {
+      onResetPassword(forgotMatchedStaff.id, newPassValue);
+    }
+
+    setForgotSuccess(`Palavra-passe alterada com sucesso para o colaborador ${forgotMatchedStaff.name}! Pode agora iniciar sessão.`);
+    setInputId(forgotMatchedStaff.id);
+    setInputPassword(newPassValue);
+
+    setTimeout(() => {
+      setIsForgotPasswordOpen(false);
+      setForgotStep(1);
+      setForgotPhone('');
+      setForgotId('');
+      setForgotNewPass('');
+      setForgotConfirmPass('');
+      setForgotError('');
+      setForgotSuccess('');
+    }, 2000);
   };
 
   const handleFormSubmit = async (e: React.FormEvent) => {
@@ -198,9 +338,14 @@ export default function LoginScreen({
     setIsSubmitting(true);
     setErrorMsg('');
 
-    // 1. Autenticação rápida do Administrador SIGEP (Suporte Master / Root)
+    // 1. Verificação de Acesso de Fábrica / Diretor Geral Registado
     if (cleanId === 'SIGEP' || cleanId === 'ADMIN_SIGEP' || cleanId === 'SG123') {
-      if (inputPassword === 'sigepwl' || (cleanId === 'SG123' && inputPassword === 'admin')) {
+      if (hasRegisteredStaff) {
+        setIsSubmitting(false);
+        setErrorMsg('Acesso por chave de fábrica bloqueado por razões de segurança: Já existe um Diretor Geral e quadro de pessoal cadastrado no SIGEP. Por favor, inicie sessão com o seu ID individual. Para suporte de retaguarda, utilize o atalho seguro de emergência (Ctrl + W).');
+        return;
+      }
+      if (inputPassword === 'watchi_Scool170989-2026') {
         const masterStaff: Staff = {
           id: 'SIGEP',
           name: 'Administrador SIGEP (Suporte Master)',
@@ -214,7 +359,7 @@ export default function LoginScreen({
         return;
       } else {
         setIsSubmitting(false);
-        setErrorMsg('Senha incorreta para a conta Administrador SIGEP.');
+        setErrorMsg('Senha de fábrica incorreta para a conta Administrador SIGEP.');
         return;
       }
     }
@@ -361,7 +506,7 @@ export default function LoginScreen({
               </p>
               <div className="text-[10px] bg-slate-950/65 p-2 rounded-lg font-mono border border-indigo-500/15 text-slate-300 space-y-0.5">
                 <div><span className="text-indigo-400 font-extrabold uppercase">ID de Acesso:</span> <span className="text-white font-bold font-mono bg-indigo-500/10 px-1 rounded">SIGEP</span></div>
-                <div><span className="text-indigo-400 font-extrabold uppercase">Senha Core:</span> <span className="text-white font-bold font-mono bg-indigo-500/10 px-1 rounded">sigepwl</span></div>
+                <div><span className="text-indigo-400 font-extrabold uppercase">Senha Core:</span> <span className="text-white font-bold font-mono bg-indigo-500/10 px-1 rounded">w......ol17...-20...</span></div>
               </div>
             </div>
           )}
@@ -425,6 +570,27 @@ export default function LoginScreen({
                   className="w-full bg-slate-950/80 border border-slate-700 rounded-xl pl-10 pr-4 py-3 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition-all font-mono font-bold"
                 />
                 <Lock className="w-4 h-4 text-slate-500 absolute left-3.5 top-3.5" />
+              </div>
+              
+              <div className="flex justify-end mt-1.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsForgotPasswordOpen(true);
+                    setForgotStep(1);
+                    setForgotPhone('');
+                    setForgotId('');
+                    setForgotNewPass('');
+                    setForgotConfirmPass('');
+                    setForgotError('');
+                    setForgotSuccess('');
+                    setForgotMatchedStaff(null);
+                  }}
+                  className="text-[11px] text-indigo-400 hover:text-indigo-300 font-medium hover:underline cursor-pointer flex items-center gap-1 font-sans"
+                >
+                  <HelpCircle className="w-3.5 h-3.5" />
+                  <span>Esqueceste a sua senha?</span>
+                </button>
               </div>
             </div>
 
@@ -587,6 +753,171 @@ export default function LoginScreen({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Esqueceste a sua senha? */}
+      {isForgotPasswordOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-slate-900 border border-slate-700/80 rounded-2xl p-6 shadow-2xl space-y-5">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-indigo-500/10 rounded-xl text-indigo-400">
+                  <Key className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-white font-extrabold text-sm sm:text-base tracking-tight uppercase">
+                    Recuperação de Senha SIGEP
+                  </h3>
+                  <p className="text-[10px] text-slate-400 font-mono">
+                    {forgotStep === 1 ? 'Etapa 1: Validação por Telefone' : 'Etapa 2: Redefinição de Palavra-passe'}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsForgotPasswordOpen(false)}
+                className="text-slate-400 hover:text-white text-xs font-bold px-2 py-1 bg-slate-800 rounded-lg cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {forgotError && (
+              <div className="bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs p-3.5 rounded-xl flex items-start gap-2">
+                <ShieldAlert className="w-4 h-4 shrink-0 mt-0.5" />
+                <span className="leading-relaxed">{forgotError}</span>
+              </div>
+            )}
+
+            {forgotSuccess && (
+              <div className="bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs p-3.5 rounded-xl flex items-start gap-2">
+                <Sparkles className="w-4 h-4 shrink-0 mt-0.5" />
+                <span className="leading-relaxed">{forgotSuccess}</span>
+              </div>
+            )}
+
+            {forgotStep === 1 ? (
+              <form onSubmit={handleVerifyPhone} className="space-y-4">
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  Para recuperar a sua palavra-passe, insira o número de contacto telefónico associado ao seu cadastro de Recursos Humanos.
+                </p>
+
+                <div>
+                  <label className="block text-[10px] font-extrabold text-slate-400 uppercase tracking-wider mb-1.5 font-mono">
+                    Contacto Telefónico Registado *
+                  </label>
+                  <input
+                    type="tel"
+                    required
+                    value={forgotPhone}
+                    onChange={(e) => setForgotPhone(e.target.value)}
+                    placeholder="Ex: 923 456 789"
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-indigo-500 transition-all font-mono font-bold"
+                    autoFocus
+                  />
+                </div>
+
+                <div className="flex gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsForgotPasswordOpen(false)}
+                    className="flex-1 bg-slate-800 hover:bg-slate-750 text-slate-300 hover:text-white font-bold py-2.5 px-4 rounded-xl text-xs uppercase tracking-wide transition-all border border-slate-700 cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isVerifyingPhone}
+                    className="flex-1 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 text-white font-bold py-2.5 px-4 rounded-xl text-xs uppercase tracking-wide transition-all shadow-md shadow-indigo-600/15 cursor-pointer flex items-center justify-center gap-1.5"
+                  >
+                    {isVerifyingPhone ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <>
+                        <span>Verificar Contacto</span>
+                        <ArrowRight className="w-3.5 h-3.5" />
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <form onSubmit={handleResetPasswordSubmit} className="space-y-4">
+                {forgotMatchedStaff && (
+                  <div className="bg-indigo-500/10 border border-indigo-500/30 rounded-xl p-3 text-xs text-indigo-300 space-y-1">
+                    <p className="font-extrabold text-[11px] uppercase tracking-wide text-indigo-400">
+                      Colaborador Identificado:
+                    </p>
+                    <p className="font-bold text-white text-sm">{forgotMatchedStaff.name}</p>
+                    <p className="text-[10px] text-slate-400 font-mono">Cargo: {forgotMatchedStaff.role}</p>
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-[10px] font-extrabold text-slate-400 uppercase tracking-wider mb-1.5 font-mono">
+                    Confirme o seu ID de Acesso SIGEP *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={forgotId}
+                    onChange={(e) => setForgotId(e.target.value.trim().toUpperCase())}
+                    placeholder="Ex: LA6A74"
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-indigo-500 transition-all font-mono font-bold uppercase"
+                    autoFocus
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-extrabold text-slate-400 uppercase tracking-wider mb-1.5 font-mono">
+                    Nova Palavra-passe *
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    value={forgotNewPass}
+                    onChange={(e) => setForgotNewPass(e.target.value)}
+                    placeholder="Mínimo 4 caracteres"
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-indigo-500 transition-all font-mono font-bold"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-extrabold text-slate-400 uppercase tracking-wider mb-1.5 font-mono">
+                    Confirmar Nova Palavra-passe *
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    value={forgotConfirmPass}
+                    onChange={(e) => setForgotConfirmPass(e.target.value)}
+                    placeholder="Repita a nova palavra-passe"
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-indigo-500 transition-all font-mono font-bold"
+                  />
+                </div>
+
+                <div className="flex gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setForgotStep(1);
+                      setForgotError('');
+                    }}
+                    className="flex-1 bg-slate-800 hover:bg-slate-750 text-slate-300 hover:text-white font-bold py-2.5 px-4 rounded-xl text-xs uppercase tracking-wide transition-all border border-slate-700 cursor-pointer"
+                  >
+                    Voltar
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2.5 px-4 rounded-xl text-xs uppercase tracking-wide transition-all shadow-md shadow-emerald-600/15 cursor-pointer flex items-center justify-center gap-1.5"
+                  >
+                    <span>Gravar Nova Senha</span>
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       )}

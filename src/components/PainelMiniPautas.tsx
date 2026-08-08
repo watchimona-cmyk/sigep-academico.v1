@@ -262,6 +262,13 @@ export default function PainelMiniPautas({
       localStorage.setItem('sigep_temporary_unlocks_v1', JSON.stringify(updated));
       window.dispatchEvent(new Event('storage'));
 
+      // Push unlock to central server API for real-time LAN/Wi-Fi sync across computers
+      fetch('/api/unlocks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updated)
+      }).catch(() => {});
+
       const chatLogs = JSON.parse(localStorage.getItem('sigep_log_comunicacao_interna_v2') || '[]');
       const sysMsg = {
         id: `sys-unlocked-${Date.now()}`,
@@ -293,6 +300,12 @@ Validade: 2 Minutos (Expira em: ${new Date(newUnlock.expiresAt).toLocaleTimeStri
         const filtered = parsed.filter((u: any) => !(u.studentId === studentId && u.subject === subject && u.trimester === trimester));
         localStorage.setItem('sigep_temporary_unlocks_v1', JSON.stringify(filtered));
         window.dispatchEvent(new Event('storage'));
+
+        fetch('/api/unlocks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(filtered)
+        }).catch(() => {});
       }
     } catch (e) {
       console.error(e);

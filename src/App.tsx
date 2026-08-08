@@ -82,13 +82,26 @@ import ChatStaff from './components/ChatStaff';
 import AcademicArea from './components/AcademicArea';
 import StatsDashboard from './components/StatsDashboard';
 import { NAVIGATION_CONFIG, MenuItemConfig } from './navigationConfig';
-import { getSectionsList } from './utils';
+import { getSectionsList, sanitizeStaffList, getProfessorAllowedClasses, getProfessorAllowedSections } from './utils';
 
 const LOCAL_STORAGE_STUDENTS_KEY = 'sigep_students_v1';
 const LOCAL_STORAGE_GRADES_KEY = 'sigep_grades_v1';
 const LOCAL_STORAGE_SCHOOL_SETTINGS_KEY = 'sigep_school_settings_v1';
 const LOCAL_STORAGE_STAFF_KEY = 'sigep_staff_v1';
 const LOCAL_STORAGE_LOGGED_IN_STAFF_KEY = 'sigep_logged_in_staff_v1';
+
+function saveStaffToLocalStorage(staffList: Staff[]) {
+  console.log('[DEBUG LOCAL_STORAGE_STAFF_KEY] Gravando lista de RH no localStorage:', {
+    quantidade: staffList.length,
+    professores: staffList.filter(s => s.role === 'PROFESSOR').map(p => ({
+      id: p.id,
+      name: p.name,
+      subjects: p.subjects,
+      assignmentsCount: p.assignments?.length || 0
+    }))
+  });
+  safeSetItem(LOCAL_STORAGE_STAFF_KEY, JSON.stringify(staffList));
+}
 
 const DEFAULT_SCHOOL_SETTINGS: SchoolSettings = {
   schoolName: "COMPLEXO ESCOLAR Nº 1709 LNO, WATCHIMONA",
@@ -1011,7 +1024,7 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
       ]));
 
   const filteredClassesList = loggedInStaff && loggedInStaff.role === 'PROFESSOR'
-    ? (loggedInStaff.classes && loggedInStaff.classes.length > 0 ? loggedInStaff.classes : [classesList[0]])
+    ? getProfessorAllowedClasses(loggedInStaff, classesList)
     : classesList;
 
   const classesForSelectedLevel = filteredClassesList.filter(cl => {
@@ -1081,7 +1094,7 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
   };
 
   const filteredSectionsList = loggedInStaff && loggedInStaff.role === 'PROFESSOR'
-    ? (loggedInStaff.sections && loggedInStaff.sections.length > 0 ? loggedInStaff.sections : ['A', 'B'])
+    ? getProfessorAllowedSections(loggedInStaff, currentClass, sectionsList)
     : sectionsList;
 
   // Enforce Tab Restrictions for Professor
@@ -1095,8 +1108,8 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
   // Synchronize dynamic lists and resets for Professor
   useEffect(() => {
     if (loggedInStaff && loggedInStaff.role === 'PROFESSOR') {
-      const allowedClasses = loggedInStaff.classes || [];
-      const allowedSections = loggedInStaff.sections || [];
+      const allowedClasses = getProfessorAllowedClasses(loggedInStaff, classesList);
+      const allowedSections = getProfessorAllowedSections(loggedInStaff, currentClass, sectionsList);
       if (allowedClasses.length > 0 && !allowedClasses.includes(currentClass)) {
         setCurrentClass(allowedClasses[0]);
       }
@@ -1133,22 +1146,32 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
         }
       }
 
-      if (savedStaff) {
+      const isRhCleared = localStorage.getItem('sigep_rh_cleared') === 'true';
+
+      if (isRhCleared) {
+        setStaffList([]);
+        saveStaffToLocalStorage([]);
+      } else if (savedStaff) {
         try {
           const parsedStaff = JSON.parse(savedStaff);
           if (Array.isArray(parsedStaff) && parsedStaff.length > 0) {
-            setStaffList(parsedStaff);
+            const sanitized = sanitizeStaffList(parsedStaff);
+            setStaffList(sanitized);
+            saveStaffToLocalStorage(sanitized);
           } else {
-            setStaffList(INITIAL_STAFF);
-            safeSetItem(LOCAL_STORAGE_STAFF_KEY, JSON.stringify(INITIAL_STAFF));
+            const sanitized = sanitizeStaffList(INITIAL_STAFF);
+            setStaffList(sanitized);
+            saveStaffToLocalStorage(sanitized);
           }
         } catch (e) {
-          setStaffList(INITIAL_STAFF);
-          safeSetItem(LOCAL_STORAGE_STAFF_KEY, JSON.stringify(INITIAL_STAFF));
+          const sanitized = sanitizeStaffList(INITIAL_STAFF);
+          setStaffList(sanitized);
+          saveStaffToLocalStorage(sanitized);
         }
       } else {
-        setStaffList(INITIAL_STAFF);
-        safeSetItem(LOCAL_STORAGE_STAFF_KEY, JSON.stringify(INITIAL_STAFF));
+        const sanitized = sanitizeStaffList(INITIAL_STAFF);
+        setStaffList(sanitized);
+        saveStaffToLocalStorage(sanitized);
       }
 
       // Para conformidade com a Persistência de Sessão Segura (SIGEP 4.2.0),
@@ -1199,6 +1222,11 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
   useEffect(() => {
     let isMounted = true;
     const autoSyncStaffOnBoot = async () => {
+      const isCleared = localStorage.getItem('sigep_rh_cleared') === 'true';
+      if (isCleared) {
+        console.log('[SIGEP Sync] Banco de dados de RH foi zerado pelo utilizador. Ignorando sincronização com servidor remoto.');
+        return;
+      }
       try {
         const apiUrl = await resolveWorkingApiUrl(schoolSettings?.syncServerUrl);
         if (!apiUrl) return;
@@ -1206,8 +1234,9 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
         if (res.ok) {
           const remoteStaff = await res.json();
           if (isMounted && Array.isArray(remoteStaff) && remoteStaff.length > 0) {
-            setStaffList(remoteStaff);
-            safeSetItem(LOCAL_STORAGE_STAFF_KEY, JSON.stringify(remoteStaff));
+            const sanitized = sanitizeStaffList(remoteStaff);
+            setStaffList(sanitized);
+            saveStaffToLocalStorage(sanitized);
             console.log('[SIGEP Sync] Utilizadores e credenciais sincronizados com sucesso a partir do servidor central.');
           }
         }
@@ -1239,14 +1268,22 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
     setSchoolSettings(updated);
     safeSetItem(LOCAL_STORAGE_SCHOOL_SETTINGS_KEY, JSON.stringify(updated));
 
-    // Background configuration push to PostgreSQL if enabled
+    // Always push settings update to local server API so schoolSettings (trimesters open/closed) are saved in PostgreSQL
+    fetchWithTimeout('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ schoolSettings: updated })
+    }, 5000).catch(err => console.warn("Erro ao salvar config no Postgres:", err));
+
     if (updated.syncEnabled && updated.syncServerUrl) {
       const url = updated.syncServerUrl;
-      fetchWithTimeout(`${url}/api/config`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ schoolSettings: updated })
-      }, 5000).catch(err => console.warn("Erro ao salvar config no Postgres:", err));
+      if (url && typeof window !== 'undefined' && !url.includes(window.location.host)) {
+        fetchWithTimeout(`${url}/api/config`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ schoolSettings: updated })
+        }, 5000).catch(err => console.warn("Erro ao salvar config no servidor remoto:", err));
+      }
     }
   };
 
@@ -1417,8 +1454,8 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
     if (!resPropinas.ok) throw new Error("Falha ao buscar propinas do servidor");
     const gotPropinas = await resPropinas.json();
 
-    // 5. Grelha Curricular (85% -> 95%)
-    onProgress?.(90, 'A importar Grelha Curricular e Matrizes...');
+    // 5. Grelha Curricular (85% -> 92%)
+    onProgress?.(88, 'A importar Grelha Curricular e Matrizes...');
     let gotGrelha = null;
     try {
       const resGrelha = await fetchWithTimeout(`${url}/api/grelha`, {}, 10000);
@@ -1428,6 +1465,32 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
     } catch (e) {
       console.warn("Falha ao carregar grelha curricular remota, usando local:", e);
     }
+
+    // 6. Configurações da Escola e Trimestres (92% -> 96%)
+    onProgress?.(93, 'A importar Configurações Institucionais e Estado dos Trimestres...');
+    try {
+      const resConfig = await fetchWithTimeout(`${url}/api/config`, {}, 10000);
+      if (resConfig.ok) {
+        const gotConfig = await resConfig.json();
+        if (gotConfig && gotConfig.schoolSettings) {
+          setSchoolSettings(prev => ({ ...prev, ...gotConfig.schoolSettings }));
+          safeSetItem(LOCAL_STORAGE_SCHOOL_SETTINGS_KEY, JSON.stringify(gotConfig.schoolSettings));
+        }
+      }
+    } catch (e) {
+      console.warn("Falha ao carregar configurações remotas:", e);
+    }
+
+    // 7. Desbloqueios Temporários (96% -> 98%)
+    try {
+      const resUnlocks = await fetchWithTimeout(`${url}/api/unlocks`, {}, 10000);
+      if (resUnlocks.ok) {
+        const gotUnlocks = await resUnlocks.json();
+        if (Array.isArray(gotUnlocks)) {
+          safeSetItem('sigep_temporary_unlocks_v1', JSON.stringify(gotUnlocks));
+        }
+      }
+    } catch (e) {}
 
     // Process & Save
     onProgress?.(98, 'A atualizar banco de dados local e memória...');
@@ -1458,6 +1521,21 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
       grelhaCount: Array.isArray(gotGrelha) ? gotGrelha.length : 0
     };
   };
+
+  // Sincronizar dados do perfil logado (ex: disciplinas atribuídas ao professor) quando staffList é atualizado via IP
+  useEffect(() => {
+    if (loggedInStaff && loggedInStaff.id) {
+      const currentInList = staffList.find(s => String(s.id).trim().toUpperCase() === String(loggedInStaff.id).trim().toUpperCase());
+      if (currentInList) {
+        const hasChangedAssignments = JSON.stringify(currentInList.assignments || []) !== JSON.stringify(loggedInStaff.assignments || []);
+        const hasChangedRole = currentInList.role !== loggedInStaff.role;
+        if (hasChangedAssignments || hasChangedRole) {
+          setLoggedInStaff(currentInList);
+          safeSetSessionItem(LOCAL_STORAGE_LOGGED_IN_STAFF_KEY, JSON.stringify(currentInList));
+        }
+      }
+    }
+  }, [staffList]);
 
   // Automatic Sync Pull on Mount (Garante que qualquer navegador cliente no Wi-Fi/LAN receba os dados do Servidor Central)
   useEffect(() => {
@@ -1529,6 +1607,18 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
           if (gotConfig && gotConfig.schoolSettings) {
             setSchoolSettings(prev => ({ ...prev, ...gotConfig.schoolSettings }));
             safeSetItem(LOCAL_STORAGE_SCHOOL_SETTINGS_KEY, JSON.stringify(gotConfig.schoolSettings));
+          }
+        }
+
+        // 6. Desbloqueios Temporários
+        let resUnlocks = await fetchWithTimeout(`${baseUrl}/api/unlocks`, {}, 4000).catch(() => null);
+        if ((!resUnlocks || !resUnlocks.ok) && baseUrl !== '') {
+          resUnlocks = await fetchWithTimeout('/api/unlocks', {}, 4000).catch(() => null);
+        }
+        if (resUnlocks && resUnlocks.ok) {
+          const gotUnlocks = await resUnlocks.json();
+          if (Array.isArray(gotUnlocks)) {
+            safeSetItem('sigep_temporary_unlocks_v1', JSON.stringify(gotUnlocks));
           }
         }
 
@@ -1730,18 +1820,66 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
 
   const handleAddStaff = (newStaff: Staff, originalId?: string) => {
     const targetId = originalId || newStaff.id;
+
+    // Bloqueio rigoroso de cargos de chefia únicos/exclusivos
+    const exclusiveRoles = [
+      'DIRECTOR_GERAL',
+      'SUB_DIRECTOR_PEDAGOGICO',
+      'SUB_DIRECTOR_ADMINISTRATIVO',
+      'CHEFE_SECRETARIA'
+    ];
+
+    if (exclusiveRoles.includes(newStaff.role)) {
+      const existingConflict = staffList.find(s => s.role === newStaff.role && s.id !== targetId);
+      if (existingConflict) {
+        const roleLabel = newStaff.role === 'DIRECTOR_GERAL' ? 'Director Geral'
+          : newStaff.role === 'SUB_DIRECTOR_PEDAGOGICO' ? 'Subdirector Pedagógico'
+          : newStaff.role === 'SUB_DIRECTOR_ADMINISTRATIVO' ? 'Subdirector Administrativo'
+          : 'Chefe de Secretaria';
+        alert(`Bloqueio de Cargo Único: O cargo de chefia de "${roleLabel}" já se encontra preenchido por "${existingConflict.name}" (ID: ${existingConflict.id}). O sistema não permite publicar ou atribuir o mesmo cargo de chefia a mais de um colaborador.`);
+        return;
+      }
+    }
+
     const exists = staffList.some(s => s.id === targetId);
+    const sanitizedNewStaff: Staff = {
+      ...newStaff,
+      classes: (newStaff.assignments && newStaff.assignments.length > 0)
+        ? Array.from(new Set([...(newStaff.classes || []), ...newStaff.assignments.map(a => a.class)]))
+        : (newStaff.classes || []),
+      sections: (newStaff.assignments && newStaff.assignments.length > 0)
+        ? Array.from(new Set([...(newStaff.sections || []), ...newStaff.assignments.map(a => a.section)]))
+        : (newStaff.sections || []),
+      subjects: (newStaff.assignments && newStaff.assignments.length > 0)
+        ? Array.from(new Set([...(newStaff.subjects || []), ...(newStaff.assignments.map(a => a.subject) as SubjectType[])]))
+        : (newStaff.subjects || [])
+    };
+
+    localStorage.removeItem('sigep_rh_cleared');
+
     let updated: Staff[];
     if (exists) {
-      updated = staffList.map(s => s.id === targetId ? { ...newStaff, password: newStaff.password || s.password || '12345' } : s);
+      updated = staffList.map(s => s.id === targetId ? { ...sanitizedNewStaff, password: sanitizedNewStaff.password || s.password || '12345' } : s);
     } else {
-      updated = [...staffList, { ...newStaff, password: newStaff.password || '12345' }];
+      updated = [...staffList, { ...sanitizedNewStaff, password: sanitizedNewStaff.password || '12345' }];
     }
-    setStaffList(updated);
-    safeSetItem(LOCAL_STORAGE_STAFF_KEY, JSON.stringify(updated));
+    const sanitized = sanitizeStaffList(updated);
+    setStaffList(sanitized);
+    saveStaffToLocalStorage(sanitized);
+
+    console.log(`[VERIFICAÇÃO DE PERSISTÊNCIA APÓS handleAddStaff - ID: ${targetId}] Professores persistidos no estado e localStorage:`,
+      sanitized.filter(s => s.role === 'PROFESSOR').map(p => ({
+        id: p.id,
+        name: p.name,
+        subjects: p.subjects,
+        assignmentsCount: p.assignments?.length || 0,
+        classes: p.classes,
+        sections: p.sections
+      }))
+    );
 
     if (loggedInStaff && loggedInStaff.id === targetId) {
-      const updatedLoggedIn = { ...newStaff, password: newStaff.password || loggedInStaff.password || '12345' };
+      const updatedLoggedIn = { ...sanitizedNewStaff, password: sanitizedNewStaff.password || loggedInStaff.password || '12345' };
       setLoggedInStaff(updatedLoggedIn);
       safeSetItem(LOCAL_STORAGE_LOGGED_IN_STAFF_KEY, JSON.stringify(updatedLoggedIn));
       
@@ -1806,8 +1944,18 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
 
   const handleDeleteStaff = (id: string) => {
     const updated = staffList.filter(s => s.id !== id);
-    setStaffList(updated);
-    safeSetItem(LOCAL_STORAGE_STAFF_KEY, JSON.stringify(updated));
+    const sanitized = sanitizeStaffList(updated);
+    setStaffList(sanitized);
+    saveStaffToLocalStorage(sanitized);
+
+    console.log(`[VERIFICAÇÃO DE PERSISTÊNCIA APÓS handleDeleteStaff - ID removido: ${id}] Professores restantes no estado e localStorage:`,
+      sanitized.filter(s => s.role === 'PROFESSOR').map(p => ({
+        id: p.id,
+        name: p.name,
+        subjects: p.subjects,
+        assignmentsCount: p.assignments?.length || 0
+      }))
+    );
 
     // Sempre apagar no backend local
     fetch(`/api/funcionarios/${id}`, { method: 'DELETE' }).catch(() => null);
@@ -2625,6 +2773,19 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
         onRefreshStaff={(updated) => {
           setStaffList(updated);
           safeSetItem(LOCAL_STORAGE_STAFF_KEY, JSON.stringify(updated));
+        }}
+        onResetPassword={(staffId, newPassword) => {
+          const updated = staffList.map(s => s.id === staffId ? { ...s, password: newPassword } : s);
+          setStaffList(updated);
+          safeSetItem(LOCAL_STORAGE_STAFF_KEY, JSON.stringify(updated));
+          const target = updated.find(s => s.id === staffId);
+          if (target) {
+            fetch('/api/funcionarios', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(target)
+            }).catch(() => null);
+          }
         }}
       />
     );
@@ -3878,13 +4039,25 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
                     onAddStaff={handleAddStaff}
                     onDeleteStaff={handleDeleteStaff}
                     onClearAllStaff={() => {
+                      console.log('[RH RESET] Limpando todo o banco de dados de Recursos Humanos...');
                       setStaffList([]);
-                      safeSetItem(LOCAL_STORAGE_STAFF_KEY, JSON.stringify([]));
+                      saveStaffToLocalStorage([]);
+                      localStorage.setItem('sigep_rh_cleared', 'true');
+                      setLoggedInStaff(null);
+                      safeSetItem(LOCAL_STORAGE_LOGGED_IN_STAFF_KEY, 'null');
+
+                      fetch('/api/funcionarios_all', { method: 'DELETE' }).catch(err => console.warn("Erro ao apagar funcionarios no backend local:", err));
+                      if (schoolSettings.syncEnabled && schoolSettings.syncServerUrl) {
+                        fetch(`${schoolSettings.syncServerUrl}/api/funcionarios_all`, { method: 'DELETE' }).catch(err => console.warn("Erro ao apagar funcionarios no backend remoto:", err));
+                      }
+
+                      handleLogout([]);
                     }}
                     userRole={userRole}
                     canEdit={canUserEditModule('RH')}
                     loggedInStaff={loggedInStaff}
                     activeModality={activeModality}
+                    schoolSettings={schoolSettings}
                   />
                 )}
 

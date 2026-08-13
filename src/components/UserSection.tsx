@@ -876,7 +876,7 @@ export default function UserSection({
                     <div className="text-xs">
                       <span className="block font-bold text-slate-800 mb-0.5">Exportação & Impressão Física</span>
                       <span className="block text-slate-500 leading-snug">
-                        Todos os utilizadores estão homologados a exportar tabelas oficiais em formato CSV (Microsoft Excel) bem como emitir listagens físicas das turmas.
+                        Todos os utilizadores estão homologados a exportar tabelas e relatórios oficiais em formato PDF bem como emitir listagens físicas das turmas.
                       </span>
                       <span className="inline-block text-[9px] font-extrabold uppercase mt-2 px-2 py-0.5 rounded-sm bg-emerald-50 text-emerald-700 border border-emerald-100">
                         AUTORIZADO GERAL

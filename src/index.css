@@ -142,7 +142,39 @@
     color: #000000 !important;
   }
 
-  /* Ocultar quaisquer elementos dentro do relacao-nominal-parent que não sejam o próprio card */
+  /* Desfazer confinamento de modais e flex layouts na impressão */
+  .fixed, .no-print-backdrop, [class*="max-h-"], [class*="overflow-"] {
+    position: static !important;
+    overflow: visible !important;
+    max-height: none !important;
+    height: auto !important;
+    width: 100% !important;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+  }
+
+  .printable-mapa-area,
+  .printable-faltas-area {
+    position: relative !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    padding: 10px !important;
+    margin: 0 !important;
+    border: none !important;
+    box-shadow: none !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    display: block !important;
+    visibility: visible !important;
+  }
+
+  .printable-mapa-area *,
+  .printable-faltas-area * {
+    visibility: visible !important;
+  }
+
+  /* Ocultar elementos dentro do cartão de relação nominal que não são o próprio cartão */
   #relacao-nominal-parent > :not(#relacao-nominal-impressao-card) {
     display: none !important;
   }

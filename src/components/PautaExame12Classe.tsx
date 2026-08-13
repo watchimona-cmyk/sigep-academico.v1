@@ -28,6 +28,8 @@ interface StudentExamRow {
   id: string;
   name: string;
   gender: 'M' | 'F';
+  isTransferidoSaida?: boolean;
+  status?: string;
   grades: {
     [disciplineId: string]: {
       mfd: number;
@@ -40,6 +42,8 @@ interface StudentExamRow13 {
   id: string;
   name: string;
   gender: 'M' | 'F';
+  isTransferidoSaida?: boolean;
+  status?: string;
   m10: number;
   m11: number;
   m12: number;
@@ -180,6 +184,19 @@ export default function PautaExame12Classe({
   
   // Tab control: '12' for 12ª Classe, '13' for 13ª Classe
   const [selectedClassTab, setSelectedClassTab] = useState<'12' | '13'>('12');
+  const [grelhaVersion, setGrelhaVersion] = useState<number>(0);
+
+  useEffect(() => {
+    const handleGrelhaEvent = () => setGrelhaVersion(v => v + 1);
+    window.addEventListener('sigep_grelha_updated', handleGrelhaEvent);
+    window.addEventListener('sigep:data-updated', handleGrelhaEvent);
+    window.addEventListener('storage', handleGrelhaEvent);
+    return () => {
+      window.removeEventListener('sigep_grelha_updated', handleGrelhaEvent);
+      window.removeEventListener('sigep:data-updated', handleGrelhaEvent);
+      window.removeEventListener('storage', handleGrelhaEvent);
+    };
+  }, []);
 
   // Load dynamically configured curriculum specialties from local storage
   const [specialties, setSpecialties] = useState<CurriculumSpecialty[]>(() => {
@@ -435,9 +452,12 @@ export default function PautaExame12Classe({
       });
 
       const isMagisterio = !selectedSpecialtyId.startsWith('puniv') && !selectedSpecialtyId.startsWith('liceu');
-      const status = negativesCount === 0 
-        ? (isMagisterio ? 'Transita' : 'Apto') 
-        : (isMagisterio ? 'N/Transita' : 'N/Apto');
+      const isTransfOrDesist = row.isTransferidoSaida || (row.status as string) === 'TRANSFERIDO_SAIDA' || row.status === 'Desistente';
+      const status = isTransfOrDesist 
+        ? 'Desistente' 
+        : (negativesCount === 0 
+          ? (isMagisterio ? 'Transita' : 'Apto') 
+          : (isMagisterio ? 'N/Transita' : 'N/Apto'));
 
       return {
         ...row,

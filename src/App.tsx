@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import * as XLSX from 'xlsx';
-import { Student, GradeRow, ActiveSheet, SubjectType, UserRole, SchoolSettings, Staff, StudentFinance, getSubjectsForClass, getSubjectsForStudent, getSubjectAbbreviation, ModalityType, SUBJECTS, carregarGrelhaCurricular } from './types';
+import { Student, GradeRow, ActiveSheet, SubjectType, UserRole, SchoolSettings, Staff, StudentFinance, getSubjectsForClass, getSubjectsForStudent, getSubjectAbbreviation, ModalityType, SUBJECTS, carregarGrelhaCurricular, PontoRecord } from './types';
 import { INITIAL_STUDENTS, generateInitialGrades, INITIAL_STAFF } from './initialData';
 import PainelMatriculas from './components/PainelMatriculas';
 import RawGradesDatabase from './components/RawGradesDatabase';
@@ -22,6 +22,7 @@ import LoginScreen from './components/LoginScreen';
 import RecursosHumanos from './components/RecursosHumanos';
 import DeclaracoesCertificados from './components/DeclaracoesCertificados';
 import HistoricoAnosModal from './components/HistoricoAnosModal';
+import { PasswordChangeModal } from './components/PasswordChangeModal';
 import SiGePLogo from './components/SiGePLogo';
 import EulaScreen from './components/EulaScreen';
 import SystemLockScreen from './components/SystemLockScreen';
@@ -35,6 +36,8 @@ import {
 } from './utils/licenca';
 
 import { 
+  Clock,
+  CheckCircle2,
   GraduationCap, 
   FolderLock, 
   Lock,
@@ -238,6 +241,11 @@ export default function App() {
 
   // Hardware Mismatch Lock State
   const [hasHardwareMismatch, setHasHardwareMismatch] = useState<boolean>(() => {
+    const isNetworkAccess = typeof window !== 'undefined' && 
+      window.location.hostname !== 'localhost' && 
+      window.location.hostname !== '127.0.0.1';
+    if (isNetworkAccess) return false; // Network terminals always obey Central Server license
+
     const key = safeGetItem('sigep_lic_chave_v1') || '';
     if (!key) return false;
     const currentIdPC = obterOuCriarIdPC();
@@ -469,6 +477,109 @@ export default function App() {
   const [authHubSuccess, setAuthHubSuccess] = useState<string | null>(null);
   const [signingRequestId, setSigningRequestId] = useState<string | null>(null);
 
+  // --- PONTO DIGITAL & ASSIDUIDADE (ESTADO GLOBAL EM TEMPO REAL) ---
+  const [pontoRecords, setPontoRecords] = useState<PontoRecord[]>(() => {
+    try {
+      const saved = localStorage.getItem('sigep_ponto_digital_records');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const savePontoRecords = useCallback((updated: PontoRecord[]) => {
+    setPontoRecords(updated);
+    safeSetItem('sigep_ponto_digital_records', JSON.stringify(updated));
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('sigep_ponto_updated', { detail: updated }));
+      window.dispatchEvent(new CustomEvent('sigep:data-updated'));
+    }
+    fetch('/api/ponto_records', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updated)
+    }).catch(() => {});
+  }, []);
+
+  // Motor de Conversão de Ausências em Faltas Automáticas (>24h decorridas e no Turno do RH)
+  const runAutoAbsenceEngine = useCallback((currentStaffList: Staff[], currentPonto: PontoRecord[]) => {
+    if (!currentStaffList || currentStaffList.length === 0) return;
+
+    const todayStr = new Date().toISOString().split('T')[0];
+    const currentHour = new Date().getHours();
+    let hasChanges = false;
+    let updatedPonto = [...currentPonto];
+
+    // 1. Verificação do Turno de Hoje
+    currentStaffList.forEach(st => {
+      if (!st.id || st.role === 'SIGEP' || st.is_root) return;
+
+      const periodo = st.periodoTrabalho || st.periodo || 'MATINAL';
+      let cutoffHour = 13; // MATINAL -> 13:00
+      if (periodo === 'VESPERTINO') cutoffHour = 18;
+      else if (periodo === 'NOTURNO') cutoffHour = 22;
+      else if (periodo === 'ADMINISTRATIVO') cutoffHour = 17;
+
+      if (currentHour >= cutoffHour) {
+        const existingRecord = updatedPonto.find(r => r.staffId === st.id && r.date === todayStr);
+        if (!existingRecord) {
+          const autoFalta: PontoRecord = {
+            id: `PONTO_${st.id}_${todayStr}`,
+            staffId: st.id,
+            staffName: st.name,
+            staffRole: st.role,
+            date: todayStr,
+            timestamp: `${cutoffHour}:00:00`,
+            status: 'FALTA_INJUSTIFICADA',
+            periodoTrabalho: periodo as any,
+            statusWorkflow: 'AGUARDANDO_ESCLARECIMENTO',
+            motivoEsclarecimentoSolicitado: `Ausência de assinatura no Ponto Digital durante o turno ${periodo}. Convertida em falta pelo motor automático de assiduidade SIGEP.`
+          };
+          updatedPonto.push(autoFalta);
+          hasChanges = true;
+        }
+      }
+    });
+
+    // 2. Verificação Retroativa de Datas Passadas (> 24 Horas)
+    const knownPastDates = Array.from(new Set(updatedPonto.map(r => r.date))).filter(d => d < todayStr);
+    knownPastDates.forEach(pastDate => {
+      currentStaffList.forEach(st => {
+        if (!st.id || st.role === 'SIGEP' || st.is_root) return;
+        const existing = updatedPonto.find(r => r.staffId === st.id && r.date === pastDate);
+        if (!existing) {
+          const periodo = st.periodoTrabalho || st.periodo || 'MATINAL';
+          const autoFaltaPast: PontoRecord = {
+            id: `PONTO_${st.id}_${pastDate}`,
+            staffId: st.id,
+            staffName: st.name,
+            staffRole: st.role,
+            date: pastDate,
+            timestamp: '23:59:59',
+            status: 'FALTA_INJUSTIFICADA',
+            periodoTrabalho: periodo as any,
+            statusWorkflow: 'AGUARDANDO_ESCLARECIMENTO',
+            motivoEsclarecimentoSolicitado: `Ausência de assinatura no Ponto Digital (>24h decorridas). Convertida automaticamente em falta no relatório SIGEP.`
+          };
+          updatedPonto.push(autoFaltaPast);
+          hasChanges = true;
+        }
+      });
+    });
+
+    if (hasChanges) {
+      setPontoRecords(updatedPonto);
+      safeSetItem('sigep_ponto_digital_records', JSON.stringify(updatedPonto));
+      fetch('/api/ponto_records', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedPonto)
+      }).catch(() => {});
+    }
+  }, []);
+
+  const [chatNotificationBanner, setChatNotificationBanner] = useState<string | null>(null);
+
   useEffect(() => {
     const loadRequests = () => {
       try {
@@ -484,12 +595,56 @@ export default function App() {
     };
     loadRequests();
     window.addEventListener('storage', loadRequests);
-    const interval = setInterval(loadRequests, 2000);
+    window.addEventListener('sigep_request_created', loadRequests);
+    const interval = setInterval(loadRequests, 1500);
     return () => {
       window.removeEventListener('storage', loadRequests);
+      window.removeEventListener('sigep_request_created', loadRequests);
       clearInterval(interval);
     };
   }, []);
+
+  // Notificações em Tempo Real de Chat para Professores e Colaboradores Autorizados
+  useEffect(() => {
+    if (!loggedInStaff) {
+      setChatNotificationBanner(null);
+      return;
+    }
+
+    const checkChatNotifs = () => {
+      try {
+        const savedConv = localStorage.getItem('sigep_canais_convidados_v1');
+        const convList = savedConv ? JSON.parse(savedConv) : [];
+        if (Array.isArray(convList)) {
+          const userInvites = convList.filter((inv: any) => 
+            (inv.id_utilizador === loggedInStaff.id || inv.id_utilizador === loggedInStaff.role) && 
+            (inv.status_convite === 'ACEITO' || inv.status_convite === 'PENDENTE')
+          );
+
+          if (userInvites.length > 0) {
+            const seenKey = `sigep_seen_chat_invites_${loggedInStaff.id}`;
+            const lastSeen = localStorage.getItem(seenKey);
+            if (!lastSeen || parseInt(lastSeen, 10) < userInvites.length) {
+              setChatNotificationBanner(`💬 NOTIFICAÇÃO DO CHAT: Foi autorizado(a) a participar no Chat do Staff / Canal de Comunicação! Clique no menu 'CHAT DO STAFF' para ver.`);
+            }
+          }
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    };
+
+    checkChatNotifs();
+    window.addEventListener('storage', checkChatNotifs);
+    window.addEventListener('sigep_chat_updated', checkChatNotifs);
+    const interval = setInterval(checkChatNotifs, 2500);
+
+    return () => {
+      window.removeEventListener('storage', checkChatNotifs);
+      window.removeEventListener('sigep_chat_updated', checkChatNotifs);
+      clearInterval(interval);
+    };
+  }, [loggedInStaff]);
 
   const pendingGradeRequestsCount = gradeRequests.filter(r => r.status === 'PENDING').length;
 
@@ -538,8 +693,34 @@ export default function App() {
     setGradeRequests(updated);
     window.dispatchEvent(new Event('storage'));
 
+    // Sync updated grade requests with central server
+    fetch('/api/grade_requests', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updated)
+    }).catch(() => {});
+
     const targetReq = gradeRequests.find(r => r.id === reqId);
     if (targetReq) {
+      // Create temporary unlock so teacher can edit the grade immediately
+      const newUnlock = {
+        id: `unlock-${targetReq.studentId}-${targetReq.subject}-${targetReq.trimester}`,
+        studentId: targetReq.studentId,
+        subject: targetReq.subject,
+        trimester: targetReq.trimester,
+        expiresAt: Date.now() + 5 * 60 * 1000 // 5 minutes unlock
+      };
+      try {
+        const existingUnlocks = JSON.parse(localStorage.getItem('sigep_temporary_unlocks_v1') || '[]');
+        const updatedUnlocks = [...existingUnlocks.filter((u: any) => !(u.studentId === targetReq.studentId && u.subject === targetReq.subject && u.trimester === targetReq.trimester)), newUnlock];
+        localStorage.setItem('sigep_temporary_unlocks_v1', JSON.stringify(updatedUnlocks));
+        fetch('/api/unlocks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(updatedUnlocks)
+        }).catch(() => {});
+      } catch (e) {}
+
       // Log to Audit logs
       logAction(
         loggedInStaff.name,
@@ -585,6 +766,13 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
     localStorage.setItem('sigep_grade_requests_v1', JSON.stringify(updated));
     setGradeRequests(updated);
     window.dispatchEvent(new Event('storage'));
+
+    // Sync rejected request with central server
+    fetch('/api/grade_requests', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updated)
+    }).catch(() => {});
 
     const targetReq = gradeRequests.find(r => r.id === reqId);
     if (targetReq && loggedInStaff) {
@@ -810,42 +998,73 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
     return 15; // default trial max 15 days
   });
 
-  // License Verification & Periodically Auto-updating remaining days label every 30 mins
-  useEffect(() => {
-    const checkLicenseDays = () => {
-      const currentIdPC = obterOuCriarIdPC();
-      if (licencaChave) {
-        const validation = validarLicencaOffline(currentIdPC, licencaChave, licencaInicio, licencaFim);
-        if (validation.isValid) {
-          const rest = calcularDiasRestantes(licencaFim);
-          setDiasRestantes(rest);
-          localStorage.setItem('sigep_custom_dias_restantes', String(rest));
+  // Central License Sync Function (Enforces Central Server Expiration across LAN / Wi-Fi)
+  const syncCentralLicense = useCallback(async () => {
+    try {
+      const res = await fetch('/api/license');
+      if (res.ok) {
+        const data = await res.json();
+        if (data && typeof data.diasRestantes === 'number') {
+          setDiasRestantes(data.diasRestantes);
+          localStorage.setItem('sigep_custom_dias_restantes', String(data.diasRestantes));
+
+          if (data.licencaChave) {
+            setLicencaChave(data.licencaChave);
+            safeSetItem('sigep_lic_chave_v1', data.licencaChave);
+          }
+          if (data.licencaInicio) {
+            setLicencaInicio(data.licencaInicio);
+            safeSetItem('sigep_lic_inicio_v1', data.licencaInicio);
+          }
+          if (data.licencaFim) {
+            setLicencaFim(data.licencaFim);
+            safeSetItem('sigep_lic_fim_v1', data.licencaFim);
+          }
           return;
         }
       }
+    } catch (e) {
+      console.warn("Aviso ao sincronizar licença do servidor central:", e);
+    }
 
-      // Calculate real trial days left based on first launch date (max 15 days trial limit)
-      const firstLaunchKey = 'sigep_first_launch_date_v1';
-      let firstLaunch = localStorage.getItem(firstLaunchKey);
-      if (!firstLaunch) {
-        firstLaunch = new Date().toISOString();
-        localStorage.setItem(firstLaunchKey, firstLaunch);
+    // Fallback if offline or server API not reachable
+    const currentIdPC = obterOuCriarIdPC();
+    if (licencaChave) {
+      const validation = validarLicencaOffline(currentIdPC, licencaChave, licencaInicio, licencaFim);
+      if (validation.isValid) {
+        const rest = calcularDiasRestantes(licencaFim);
+        setDiasRestantes(rest);
+        localStorage.setItem('sigep_custom_dias_restantes', String(rest));
+        return;
       }
-      const firstLaunchDate = new Date(firstLaunch);
-      const msPassed = new Date().getTime() - firstLaunchDate.getTime();
-      const daysPassed = Math.floor(msPassed / (1000 * 60 * 60 * 24));
-      const trialDaysLeft = Math.max(0, 15 - daysPassed);
-      
-      setDiasRestantes(trialDaysLeft);
-      localStorage.setItem('sigep_custom_dias_restantes', String(trialDaysLeft));
-    };
+    }
 
-    checkLicenseDays();
+    const firstLaunchKey = 'sigep_first_launch_date_v1';
+    let firstLaunch = localStorage.getItem(firstLaunchKey);
+    if (!firstLaunch) {
+      firstLaunch = new Date().toISOString();
+      localStorage.setItem(firstLaunchKey, firstLaunch);
+    }
+    const firstLaunchDate = new Date(firstLaunch);
+    const msPassed = new Date().getTime() - firstLaunchDate.getTime();
+    const daysPassed = Math.floor(msPassed / (1000 * 60 * 60 * 24));
+    const trialDaysLeft = Math.max(0, 15 - daysPassed);
 
-    // Check periodically to update the label as new days roll over without refresh
-    const interval = setInterval(checkLicenseDays, 30 * 60 * 1000);
-    return () => clearInterval(interval);
+    setDiasRestantes(trialDaysLeft);
+    localStorage.setItem('sigep_custom_dias_restantes', String(trialDaysLeft));
   }, [licencaChave, licencaInicio, licencaFim]);
+
+  // Periodically Auto-updating license status from Central Server every 15 seconds
+  useEffect(() => {
+    syncCentralLicense();
+    const interval = setInterval(syncCentralLicense, 15 * 1000);
+    const handleDataUpdated = () => syncCentralLicense();
+    window.addEventListener('sigep:data-updated', handleDataUpdated);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('sigep:data-updated', handleDataUpdated);
+    };
+  }, [syncCentralLicense]);
 
   // Redirection: Force user out of restricted tabs when license/trial is expired (diasRestantes <= 0)
   useEffect(() => {
@@ -853,7 +1072,7 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
       const allowedTabs: ActiveSheet[] = ['HOME', 'RELACAO_NOMINAL', 'DECLARACOES_CERTIFICADOS', 'UTILIZADOR'];
       if (!allowedTabs.includes(activeTab)) {
         setActiveTab('HOME');
-        setVbaLog("Sistema suspenso: Redirecionado para o modo leitura e impressão.");
+        setVbaLog("Sistema suspenso: Licença expirada no Servidor Central. Redirecionado para o modo leitura.");
       }
     }
   }, [diasRestantes, activeTab]);
@@ -866,23 +1085,53 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
     safeSetItem('sigep_lic_chave_v1', chave);
     safeSetItem('sigep_lic_inicio_v1', start);
     safeSetItem('sigep_lic_fim_v1', end);
-    safeSetItem('sigep_lic_id_pc_v1', currentIdPC); // Grava o ID do PC associado a esta ativação!
+    safeSetItem('sigep_lic_id_pc_v1', currentIdPC);
     
     const rest = calcularDiasRestantes(end);
     setDiasRestantes(rest);
     localStorage.setItem('sigep_custom_dias_restantes', String(rest));
     
-    // Re-verify hardware validation status
-    const validation = validarLicencaOffline(currentIdPC, chave, start, end);
-    setHasHardwareMismatch(!validation.isValid);
+    // Broadcast & Save activation to Central Server (PostgreSQL / Express API)
+    fetch('/api/license', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        licencaChave: chave,
+        licencaInicio: start,
+        licencaFim: end,
+        diasRestantes: rest,
+        serverHardwareId: currentIdPC
+      })
+    }).catch(err => console.warn('Erro ao registrar ativação de licença no servidor central:', err));
 
-    setVbaLog(`Licença ativada com sucesso: ${chave}. Válida até ${end.substring(6,8)}/${end.substring(4,6)}/${end.substring(0,4)}.`);
+    const isNetworkAccess = typeof window !== 'undefined' && 
+      window.location.hostname !== 'localhost' && 
+      window.location.hostname !== '127.0.0.1';
+
+    if (!isNetworkAccess) {
+      const validation = validarLicencaOffline(currentIdPC, chave, start, end);
+      setHasHardwareMismatch(!validation.isValid);
+    }
+
+    setVbaLog(`Licença ativada com sucesso no Servidor Central: ${chave}. Válida até ${end.substring(6,8)}/${end.substring(4,6)}/${end.substring(0,4)}.`);
   };
 
   const handleSetDiasRestantes = (days: number) => {
     setDiasRestantes(days);
     localStorage.setItem('sigep_custom_dias_restantes', String(days));
-    setVbaLog(`Período de licença ajustado para: ${days} dias.`);
+
+    fetch('/api/license', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        licencaChave,
+        licencaInicio,
+        licencaFim,
+        diasRestantes: days
+      })
+    }).catch(err => console.warn('Erro ao sincronizar ajuste de licença no servidor central:', err));
+
+    setVbaLog(`Período de licença ajustado no Servidor Central para: ${days} dias.`);
   };
 
   
@@ -1229,15 +1478,110 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
       }
       try {
         const apiUrl = await resolveWorkingApiUrl(schoolSettings?.syncServerUrl);
-        if (!apiUrl) return;
+        if (!apiUrl && apiUrl !== '') return;
         const res = await fetchWithTimeout(`${apiUrl}/api/funcionarios`, {}, 5000);
         if (res.ok) {
           const remoteStaff = await res.json();
           if (isMounted && Array.isArray(remoteStaff) && remoteStaff.length > 0) {
-            const sanitized = sanitizeStaffList(remoteStaff);
+            // Fusão inteligente entre estado/localStorage local e dados remotos do servidor
+            const savedStaffRaw = localStorage.getItem(LOCAL_STORAGE_STAFF_KEY);
+            let localStaffList: Staff[] = [];
+            if (savedStaffRaw) {
+              try { localStaffList = JSON.parse(savedStaffRaw); } catch (e) {}
+            }
+            if (!Array.isArray(localStaffList)) localStaffList = [];
+
+            const mergedMap = new Map<string, Staff>();
+
+            // 1. Carregar colaboradores locais
+            localStaffList.forEach(localItem => {
+              if (localItem && localItem.id) {
+                mergedMap.set(localItem.id.trim().toUpperCase(), { ...localItem });
+              }
+            });
+
+            // 2. Fundir com colaboradores remotos mantendo a maior riqueza de dados
+            remoteStaff.forEach((remoteItem: Staff) => {
+              if (!remoteItem || !remoteItem.id) return;
+              const key = remoteItem.id.trim().toUpperCase();
+              const localItem = mergedMap.get(key);
+
+              if (!localItem) {
+                mergedMap.set(key, remoteItem);
+              } else {
+                // Preservar e combinar assignments
+                const combinedAssignments = [
+                  ...(localItem.assignments || []),
+                  ...(remoteItem.assignments || [])
+                ];
+
+                const uniqueAssMap = new Map<string, any>();
+                combinedAssignments.forEach(a => {
+                  if (a && a.class && a.section && a.subject) {
+                    const assKey = `${a.class}_${a.section}_${a.subject}`;
+                    uniqueAssMap.set(assKey, a);
+                  }
+                });
+                let mergedAssignments = Array.from(uniqueAssMap.values());
+
+                const mergedClasses = Array.from(new Set([
+                  ...(localItem.classes || []),
+                  ...(remoteItem.classes || []),
+                  ...mergedAssignments.map(a => a.class)
+                ]));
+
+                const mergedSections = Array.from(new Set([
+                  ...(localItem.sections || []),
+                  ...(remoteItem.sections || []),
+                  ...mergedAssignments.map(a => a.section)
+                ]));
+
+                const mergedSubjects = Array.from(new Set([
+                  ...(localItem.subjects || []),
+                  ...(remoteItem.subjects || []),
+                  ...mergedAssignments.map(a => a.subject)
+                ]));
+
+                if (mergedAssignments.length === 0 && mergedClasses.length > 0 && mergedSections.length > 0 && mergedSubjects.length > 0) {
+                  const rebuilt: any[] = [];
+                  mergedClasses.forEach(c => {
+                    mergedSections.forEach(sec => {
+                      mergedSubjects.forEach(sub => {
+                        rebuilt.push({ class: c, section: sec, subject: sub, specialty: remoteItem.specialty || localItem.specialty || '' });
+                      });
+                    });
+                  });
+                  mergedAssignments = rebuilt;
+                }
+
+                mergedMap.set(key, {
+                  ...localItem,
+                  ...remoteItem,
+                  name: remoteItem.name || localItem.name,
+                  role: remoteItem.role || localItem.role,
+                  password: remoteItem.password || localItem.password || '12345',
+                  contact: remoteItem.contact || localItem.contact || '',
+                  specialty: remoteItem.specialty || localItem.specialty || '',
+                  classes: mergedClasses.length > 0 ? mergedClasses : undefined,
+                  sections: mergedSections.length > 0 ? mergedSections : undefined,
+                  subjects: mergedSubjects.length > 0 ? mergedSubjects : undefined,
+                  assignments: mergedAssignments.length > 0 ? mergedAssignments : undefined
+                });
+              }
+            });
+
+            const mergedList = Array.from(mergedMap.values());
+            const sanitized = sanitizeStaffList(mergedList);
             setStaffList(sanitized);
             saveStaffToLocalStorage(sanitized);
-            console.log('[SIGEP Sync] Utilizadores e credenciais sincronizados com sucesso a partir do servidor central.');
+            console.log('[SIGEP Sync] Utilizadores, credenciais e atribuições curriculares sincronizados com sucesso (fusão inteligente).');
+
+            // Re-sincronizar dados consolidados de volta ao servidor backend
+            fetchWithTimeout(`${apiUrl}/api/funcionarios/sync`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(sanitized)
+            }, 5000).catch(err => console.warn('[SIGEP Sync] Aviso ao consolidar banco remoto:', err));
           }
         }
       } catch (e) {
@@ -1481,13 +1825,24 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
       console.warn("Falha ao carregar configurações remotas:", e);
     }
 
-    // 7. Desbloqueios Temporários (96% -> 98%)
+    // 7. Desbloqueios Temporários e Solicitações de Alteração de Notas (96% -> 98%)
     try {
       const resUnlocks = await fetchWithTimeout(`${url}/api/unlocks`, {}, 10000);
       if (resUnlocks.ok) {
         const gotUnlocks = await resUnlocks.json();
         if (Array.isArray(gotUnlocks)) {
           safeSetItem('sigep_temporary_unlocks_v1', JSON.stringify(gotUnlocks));
+        }
+      }
+    } catch (e) {}
+
+    try {
+      const resGradeReqs = await fetchWithTimeout(`${url}/api/grade_requests`, {}, 10000);
+      if (resGradeReqs.ok) {
+        const gotReqs = await resGradeReqs.json();
+        if (Array.isArray(gotReqs)) {
+          setGradeRequests(gotReqs);
+          safeSetItem('sigep_grade_requests_v1', JSON.stringify(gotReqs));
         }
       }
     } catch (e) {}
@@ -1610,7 +1965,7 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
           }
         }
 
-        // 6. Desbloqueios Temporários
+        // 6. Desbloqueios Temporários e Solicitações de Alteração de Notas
         let resUnlocks = await fetchWithTimeout(`${baseUrl}/api/unlocks`, {}, 4000).catch(() => null);
         if ((!resUnlocks || !resUnlocks.ok) && baseUrl !== '') {
           resUnlocks = await fetchWithTimeout('/api/unlocks', {}, 4000).catch(() => null);
@@ -1619,6 +1974,18 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
           const gotUnlocks = await resUnlocks.json();
           if (Array.isArray(gotUnlocks)) {
             safeSetItem('sigep_temporary_unlocks_v1', JSON.stringify(gotUnlocks));
+          }
+        }
+
+        let resReqs = await fetchWithTimeout(`${baseUrl}/api/grade_requests`, {}, 4000).catch(() => null);
+        if ((!resReqs || !resReqs.ok) && baseUrl !== '') {
+          resReqs = await fetchWithTimeout('/api/grade_requests', {}, 4000).catch(() => null);
+        }
+        if (resReqs && resReqs.ok) {
+          const gotReqs = await resReqs.json();
+          if (Array.isArray(gotReqs)) {
+            setGradeRequests(gotReqs);
+            safeSetItem('sigep_grade_requests_v1', JSON.stringify(gotReqs));
           }
         }
 
@@ -1634,11 +2001,51 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
     autoPullOnStart();
   }, []);
 
-  // Motor de Sincronização Contínua em Tempo Real via LAN / Wi-Fi (SSE + Polling de Contingência)
+  // Motor de Sincronização Contínua e Instantânea em Tempo Real via LAN / Wi-Fi (SSE + Polling de Alta Velocidade < 2s)
   useEffect(() => {
     let eventSource: EventSource | null = null;
     let pollTimer: any = null;
+    let fastTimer: any = null;
     let lastKnownVersion = 0;
+
+    const syncFastLightweightData = async () => {
+      try {
+        let baseUrl = schoolSettings.syncEnabled && schoolSettings.syncServerUrl ? schoolSettings.syncServerUrl : '';
+        if (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+          if (baseUrl.includes('localhost') || baseUrl.includes('127.0.0.1')) baseUrl = '';
+        }
+
+        // 1. Solicitações de alteração de notas (Grade Requests) - Resposta imediata para o Director Geral
+        const resReqs = await fetch(`${baseUrl}/api/grade_requests`).catch(() => null);
+        if (resReqs && resReqs.ok) {
+          const gotReqs = await resReqs.json();
+          if (Array.isArray(gotReqs)) {
+            setGradeRequests(gotReqs);
+            safeSetItem('sigep_grade_requests_v1', JSON.stringify(gotReqs));
+          }
+        }
+
+        // 2. Registos do Ponto Digital (Presenças e Faltas)
+        const resPonto = await fetch(`${baseUrl}/api/ponto_records`).catch(() => null);
+        if (resPonto && resPonto.ok) {
+          const gotPonto = await resPonto.json();
+          if (Array.isArray(gotPonto)) {
+            setPontoRecords(gotPonto);
+            safeSetItem('sigep_ponto_digital_records', JSON.stringify(gotPonto));
+            runAutoAbsenceEngine(staffList, gotPonto);
+          }
+        }
+
+        // 3. Desbloqueios temporários de notas
+        const resUnlocks = await fetch(`${baseUrl}/api/unlocks`).catch(() => null);
+        if (resUnlocks && resUnlocks.ok) {
+          const gotUnlocks = await resUnlocks.json();
+          if (Array.isArray(gotUnlocks)) {
+            safeSetItem('sigep_temporary_unlocks_v1', JSON.stringify(gotUnlocks));
+          }
+        }
+      } catch {}
+    };
 
     const setupRealtimeConnection = () => {
       try {
@@ -1651,6 +2058,7 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
         eventSource.addEventListener('DATA_UPDATED', (e: MessageEvent) => {
           try {
             const data = JSON.parse(e.data);
+            syncFastLightweightData();
             if (data.timestamp && data.timestamp > lastKnownVersion) {
               lastKnownVersion = data.timestamp;
               pullData().catch(() => {});
@@ -1669,8 +2077,12 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
     };
 
     setupRealtimeConnection();
+    syncFastLightweightData();
 
-    // Polling de contingência a cada 4 segundos para atualizar caso haja alterações de outros dispositivos na rede LAN/Wi-Fi
+    // Polling rápido a cada 2 segundos para solicitações e ponto digital
+    fastTimer = setInterval(syncFastLightweightData, 2000);
+
+    // Polling de contingência a cada 4 segundos para a versão global de tabelas grandes
     pollTimer = setInterval(async () => {
       try {
         const versionUrl = schoolSettings.syncEnabled && schoolSettings.syncServerUrl 
@@ -1681,6 +2093,7 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
         if (res.ok) {
           const data = await res.json();
           if (data.version && data.version > lastKnownVersion) {
+            syncFastLightweightData();
             if (lastKnownVersion > 0) {
               pullData().catch(() => {});
             }
@@ -1690,11 +2103,20 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
       } catch {}
     }, 4000);
 
+    const handleWindowEvents = () => syncFastLightweightData();
+    window.addEventListener('sigep_request_created', handleWindowEvents);
+    window.addEventListener('sigep_ponto_updated', handleWindowEvents);
+    window.addEventListener('sigep:data-updated', handleWindowEvents);
+
     return () => {
       if (eventSource) eventSource.close();
       if (pollTimer) clearInterval(pollTimer);
+      if (fastTimer) clearInterval(fastTimer);
+      window.removeEventListener('sigep_request_created', handleWindowEvents);
+      window.removeEventListener('sigep_ponto_updated', handleWindowEvents);
+      window.removeEventListener('sigep:data-updated', handleWindowEvents);
     };
-  }, [schoolSettings.syncEnabled, schoolSettings.syncServerUrl]);
+  }, [schoolSettings.syncEnabled, schoolSettings.syncServerUrl, staffList, runAutoAbsenceEngine]);
 
   // Proteção de rotas em tempo real: verifica se o Diretor Geral já existe na base de dados (hasDirectorGeral)
   useEffect(() => {
@@ -1841,24 +2263,56 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
       }
     }
 
-    const exists = staffList.some(s => s.id === targetId);
+    const existingStaff = staffList.find(s => s.id === targetId);
+
+    // Preservar e fundir atribuições e disciplinas existentes para que o histórico e o cadastro do professor nunca sumam
+    let mergedAssignments = (newStaff.assignments && newStaff.assignments.length > 0)
+      ? newStaff.assignments
+      : (existingStaff?.assignments && existingStaff.assignments.length > 0 ? existingStaff.assignments : (newStaff.assignments || []));
+
+    const mergedSubjects = Array.from(new Set([
+      ...(existingStaff?.subjects || []),
+      ...(newStaff.subjects || []),
+      ...((mergedAssignments || []).map(a => a.subject) as SubjectType[])
+    ]));
+
+    const mergedClasses = Array.from(new Set([
+      ...(existingStaff?.classes || []),
+      ...(newStaff.classes || []),
+      ...((mergedAssignments || []).map(a => a.class))
+    ]));
+
+    const mergedSections = Array.from(new Set([
+      ...(existingStaff?.sections || []),
+      ...(newStaff.sections || []),
+      ...((mergedAssignments || []).map(a => a.section))
+    ]));
+
+    if (mergedAssignments.length === 0 && mergedClasses.length > 0 && mergedSections.length > 0 && mergedSubjects.length > 0) {
+      const rebuilt: any[] = [];
+      mergedClasses.forEach(c => {
+        mergedSections.forEach(sec => {
+          mergedSubjects.forEach(sub => {
+            rebuilt.push({ class: c, section: sec, subject: sub, specialty: newStaff.specialty || existingStaff?.specialty });
+          });
+        });
+      });
+      mergedAssignments = rebuilt;
+    }
+
     const sanitizedNewStaff: Staff = {
+      ...existingStaff,
       ...newStaff,
-      classes: (newStaff.assignments && newStaff.assignments.length > 0)
-        ? Array.from(new Set([...(newStaff.classes || []), ...newStaff.assignments.map(a => a.class)]))
-        : (newStaff.classes || []),
-      sections: (newStaff.assignments && newStaff.assignments.length > 0)
-        ? Array.from(new Set([...(newStaff.sections || []), ...newStaff.assignments.map(a => a.section)]))
-        : (newStaff.sections || []),
-      subjects: (newStaff.assignments && newStaff.assignments.length > 0)
-        ? Array.from(new Set([...(newStaff.subjects || []), ...(newStaff.assignments.map(a => a.subject) as SubjectType[])]))
-        : (newStaff.subjects || [])
+      classes: mergedClasses.length > 0 ? mergedClasses : undefined,
+      sections: mergedSections.length > 0 ? mergedSections : undefined,
+      subjects: mergedSubjects.length > 0 ? mergedSubjects : undefined,
+      assignments: (mergedAssignments && mergedAssignments.length > 0) ? mergedAssignments : undefined
     };
 
     localStorage.removeItem('sigep_rh_cleared');
 
     let updated: Staff[];
-    if (exists) {
+    if (existingStaff) {
       updated = staffList.map(s => s.id === targetId ? { ...sanitizedNewStaff, password: sanitizedNewStaff.password || s.password || '12345' } : s);
     } else {
       updated = [...staffList, { ...sanitizedNewStaff, password: sanitizedNewStaff.password || '12345' }];
@@ -2334,28 +2788,31 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
   };
 
   // Factreset DB
-  const handleResetDatabase = () => {
-    if (!isResetAllowed) {
-      setVbaLog('Aviso de Segurança: Reset de fábrica bloqueado! Esta operação exige a autorização prévia do Director Geral a partir do seu painel de permissões.');
-      setTimeout(() => setVbaLog(null), 8000);
-      return;
+  const handleResetDatabase = (skipAuthCheck = false) => {
+    if (!skipAuthCheck) {
+      if (!isResetAllowed) {
+        setVbaLog('Aviso de Segurança: Reset de fábrica bloqueado! Esta operação exige a autorização prévia do Director Geral a partir do seu painel de permissões.');
+        setTimeout(() => setVbaLog(null), 8000);
+        return;
+      }
+
+      const directorPass = getDirectorPassword();
+      const senha = prompt("Aviso de Segurança (Reset de Fábrica):\nEsta operação irá restaurar a base de dados ao estado original.\nDigite a senha do perfil Diretor Geral para validar:");
+      if (senha === null) return;
+      if (senha !== directorPass) {
+        alert("Operação rejeitada: Senha do Diretor Geral inválida.");
+        return;
+      }
     }
 
-    const directorPass = getDirectorPassword();
-    const senha = prompt("Aviso de Segurança (Reset de Fábrica):\nEsta operação irá restaurar a base de dados ao estado original.\nDigite a senha do perfil Diretor Geral para validar:");
-    if (senha === null) return;
-    if (senha !== directorPass) {
-      alert("Operação rejeitada: Senha do Diretor Geral inválida.");
-      return;
-    }
-
-    setStudents(INITIAL_STUDENTS);
-    const generated = generateInitialGrades(INITIAL_STUDENTS);
-    setGrades(generated);
-    safeSetItem(LOCAL_STORAGE_STUDENTS_KEY, JSON.stringify(INITIAL_STUDENTS));
-    safeSetItem(LOCAL_STORAGE_GRADES_KEY, JSON.stringify(generated));
+    setStudents([]);
+    setGrades([]);
+    safeSetItem(LOCAL_STORAGE_STUDENTS_KEY, JSON.stringify([]));
+    safeSetItem(LOCAL_STORAGE_GRADES_KEY, JSON.stringify([]));
+    safeSetItem('sigep_propinas_v1', JSON.stringify([]));
+    safeSetItem('sigep_propinas_db', JSON.stringify({}));
     
-    setVbaLog('Base de dados restaurada para o estado original.');
+    setVbaLog('Base de dados restaurada para o estado de fábrica com sucesso.');
     setTimeout(() => setVbaLog(null), 4000);
     setResetConfirmActive(false);
   };
@@ -3339,6 +3796,130 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
             </div>
           </header>
 
+          {/* BANNERS DE NOTIFICAÇÃO EM TEMPO REAL EM DESTAQUE */}
+          {loggedInStaff && (loggedInStaff.role === 'DIRECTOR_GERAL' || loggedInStaff.role === 'SUB_DIRECTOR_PEDAGOGICO' || loggedInStaff.role === 'SIGEP' || loggedInStaff.is_root) && pendingGradeRequestsCount > 0 && (
+            <div className="bg-rose-600 text-white px-4 py-2.5 flex items-center justify-between text-xs font-bold animate-pulse shadow-md z-30 shrink-0 border-b border-rose-700">
+              <div className="flex items-center gap-2.5">
+                <ShieldAlert className="w-5 h-5 text-amber-300 animate-bounce shrink-0" />
+                <span>
+                  🚨 <strong>SOLICITAÇÃO DE AUTORIZAÇÃO DE NOTAS / TRIMESTRE PENDENTE!</strong> Existe(m) <span className="bg-white text-rose-800 px-1.5 py-0.5 rounded font-black">{pendingGradeRequestsCount}</span> pedido(s) aguardando sua assinatura digital.
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsAuthHubOpen(true)}
+                className="px-3.5 py-1 bg-white text-rose-800 hover:bg-rose-50 font-black rounded-lg shadow-sm cursor-pointer text-[11px] uppercase tracking-wider shrink-0"
+              >
+                Assinar / Liberar
+              </button>
+            </div>
+          )}
+
+          {chatNotificationBanner && (
+            <div className="bg-gradient-to-r from-violet-600 via-indigo-700 to-slate-900 text-white px-4 py-2.5 flex items-center justify-between text-xs font-bold shadow-md z-30 shrink-0 border-b border-indigo-800 animate-fadeIn">
+              <div className="flex items-center gap-2.5">
+                <MessageSquare className="w-5 h-5 text-violet-200 animate-bounce shrink-0" />
+                <span>{chatNotificationBanner}</span>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveTab('COMUNICACAO');
+                    if (loggedInStaff) {
+                      const savedConv = localStorage.getItem('sigep_canais_convidados_v1');
+                      const convList = savedConv ? JSON.parse(savedConv) : [];
+                      const count = Array.isArray(convList) ? convList.length : 1;
+                      localStorage.setItem(`sigep_seen_chat_invites_${loggedInStaff.id}`, count.toString());
+                    }
+                    setChatNotificationBanner(null);
+                  }}
+                  className="px-3.5 py-1 bg-white text-indigo-950 hover:bg-violet-50 font-black rounded-lg shadow-sm cursor-pointer text-[11px] uppercase tracking-wider"
+                >
+                  Aceder ao Chat
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (loggedInStaff) {
+                      const savedConv = localStorage.getItem('sigep_canais_convidados_v1');
+                      const convList = savedConv ? JSON.parse(savedConv) : [];
+                      const count = Array.isArray(convList) ? convList.length : 1;
+                      localStorage.setItem(`sigep_seen_chat_invites_${loggedInStaff.id}`, count.toString());
+                    }
+                    setChatNotificationBanner(null);
+                  }}
+                  className="p-1 hover:bg-white/20 rounded-md cursor-pointer text-white"
+                  title="Fechar Notificação"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* BANNER UNIVERSAL OBRIGATÓRIO DE PRESENÇA / PONTO DIGITAL DA ESCOLA (OCULTO APÓS ASSINAR) */}
+          {loggedInStaff && (() => {
+            const todayStr = new Date().toISOString().split('T')[0];
+            const todayRec = pontoRecords.find(r => r.staffId === loggedInStaff.id && r.date === todayStr);
+            const isPresent = todayRec?.status === 'PRESENTE' || todayRec?.status === 'PRESENCA_JUSTIFICADA';
+            
+            // Oculta o banner após assinar a presença para não ocupar espaço na tela
+            if (isPresent) return null;
+
+            const periodoStr = loggedInStaff.periodoTrabalho || loggedInStaff.periodo || 'MATINAL';
+
+            return (
+              <div className="px-4 py-2.5 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-md z-30 shrink-0 border-b text-xs font-bold transition-all bg-gradient-to-r from-rose-950 via-slate-900 to-indigo-950 text-white border-rose-800/80">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 rounded-xl border shrink-0 bg-rose-900/70 border-rose-500/50 text-rose-300 animate-pulse">
+                    <Clock className="w-5 h-5 text-amber-300 animate-bounce" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded border tracking-wider bg-rose-500/30 text-rose-200 border-rose-400/50 font-mono animate-pulse">
+                        🚨 PONTO DIGITAL OBRIGATÓRIO
+                      </span>
+                      <span className="text-[10px] font-mono text-slate-300">
+                        {todayStr}
+                      </span>
+                    </div>
+                    <p className="text-xs font-extrabold text-white mt-0.5">
+                      {loggedInStaff.name} <span className="text-slate-300 font-normal">({loggedInStaff.role})</span> • Turno RH: <strong className="text-amber-200 uppercase">{periodoStr}</strong>
+                    </p>
+                  </div>
+                </div>
+
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const nowTime = new Date().toLocaleTimeString('pt-PT');
+                      const newRec: PontoRecord = {
+                        id: `PONTO_${loggedInStaff.id}_${todayStr}`,
+                        staffId: loggedInStaff.id,
+                        staffName: loggedInStaff.name,
+                        staffRole: loggedInStaff.role,
+                        date: todayStr,
+                        timestamp: nowTime,
+                        status: 'PRESENTE',
+                        periodoTrabalho: periodoStr as any,
+                        statusWorkflow: 'CONFIRMADO'
+                      };
+                      const updated = [...pontoRecords.filter(r => !(r.staffId === loggedInStaff.id && r.date === todayStr)), newRec];
+                      savePontoRecords(updated);
+                      window.alert(`✅ Presença de ${loggedInStaff.name} confirmada com sucesso às ${nowTime}!`);
+                    }}
+                    className="px-5 py-2 bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white font-black text-xs rounded-xl shadow-lg transition-all cursor-pointer flex items-center gap-2 border border-rose-400/50 hover:scale-105 uppercase tracking-wider"
+                  >
+                    <CheckCircle2 className="w-4 h-4 text-white" />
+                    <span>Assinar Minha Presença de Hoje ({new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' })})</span>
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
+
           {/* Horizontal Inverted Navigation Sub-Bar (Appears when Sidebar Menu is Hidden) */}
           {!isMainMenuOpen && (
             <div className="bg-[#0f172a] border-b border-slate-800 px-3 py-1.5 flex items-center gap-2 overflow-x-auto custom-scrollbar shrink-0 shadow-md select-none z-10 transition-all">
@@ -3493,7 +4074,7 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
         </div>
 
         {/* Filter & Logic Bar */}
-        {(activeTab === 'PAUTA1' || activeTab === 'PAUTA1TM1' || activeTab === 'HOME') && (
+        {(activeTab === 'PAUTA1' || activeTab === 'PAUTA1TM1') && (
           <div className="bg-white border-b border-slate-200/80 p-4 shrink-0 px-6 sm:px-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-sm z-10">
             <div className="flex items-center gap-4 flex-wrap">
               <div className="flex flex-col">
@@ -3556,7 +4137,7 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
                 </select>
               </div>
 
-              {((userRole === 'DIRECTOR_GERAL' || loggedInStaff?.role === 'DIRECTOR_GERAL') && activeTab !== 'HOME') && (
+              {(userRole === 'DIRECTOR_GERAL' || loggedInStaff?.role === 'DIRECTOR_GERAL') && (
               <>
                 <div className="h-8 w-px bg-slate-200 hidden sm:block"></div>
 
@@ -3578,11 +4159,11 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
 
             <div className="text-left sm:text-right">
               <p className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest">
-                {activeTab === 'HOME' ? 'STATUS DO PAINEL' : 'STATUS DA PLANILHA'}
+                STATUS DA PLANILHA
               </p>
               <p className="text-xs font-bold text-emerald-600 flex items-center sm:justify-end gap-1.5 mt-0.5">
                 <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span> 
-                {activeTab === 'HOME' ? 'Métricas actualizadas' : 'Pronto para cálculo'}
+                Pronto para cálculo
               </p>
             </div>
           </div>
@@ -3890,7 +4471,7 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
                             setTimeout(() => {
                               fetch('/api/health')
                                 .then(res => res.json())
-                                .then(data => setDbConnected(data.status === 'ok'))
+                                .then(data => setDbConnected(data.connected === true))
                                 .catch(() => setDbConnected(false));
                             }, 1000);
                           }}
@@ -4447,6 +5028,18 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
                 setActiveTab('DECLARACOES_CERTIFICADOS');
               }}
             />
+
+            {/* Modal de Alteração Obrigatória de Senha Expirada / Pós-Restauro */}
+            {loggedInStaff && (loggedInStaff.senha_expirada || loggedInStaff.password_expired) && (
+              <PasswordChangeModal
+                staff={loggedInStaff}
+                onPasswordUpdated={(updatedStaff) => {
+                  setLoggedInStaff(updatedStaff);
+                  safeSetSessionItem(LOCAL_STORAGE_LOGGED_IN_STAFF_KEY, JSON.stringify(updatedStaff));
+                  setStaffList(prev => prev.map(s => String(s.id).trim().toUpperCase() === String(updatedStaff.id).trim().toUpperCase() ? updatedStaff : s));
+                }}
+              />
+            )}
 
           </div>
         </div>

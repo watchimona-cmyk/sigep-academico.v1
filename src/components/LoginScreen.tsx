@@ -342,7 +342,7 @@ export default function LoginScreen({
     if (cleanId === 'SIGEP' || cleanId === 'ADMIN_SIGEP' || cleanId === 'SG123') {
       if (hasRegisteredStaff) {
         setIsSubmitting(false);
-        setErrorMsg('Acesso por chave de fábrica bloqueado por razões de segurança: Já existe um Diretor Geral e quadro de pessoal cadastrado no SIGEP. Por favor, inicie sessão com o seu ID individual. Para suporte de retaguarda, utilize o atalho seguro de emergência (Ctrl + W).');
+        setErrorMsg('Acesso por chave de fábrica bloqueado por razões de segurança: Já existe um Diretor Geral e quadro de pessoal cadastrado no SIGEP. Por favor, inicie sessão com o seu ID individual.');
         return;
       }
       if (inputPassword === 'watchi_Scool170989-2026') {

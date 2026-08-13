@@ -200,12 +200,50 @@ export function ChatStaff({ loggedInStaff, staffList, students = [], onOpenStude
   const saveMessagesToStorage = (updated: LogComunicacaoInterna[]) => {
     setMessages(updated);
     localStorage.setItem('sigep_log_comunicacao_interna_v2', JSON.stringify(updated));
+    window.dispatchEvent(new Event('storage'));
+    window.dispatchEvent(new CustomEvent('sigep_chat_updated'));
   };
 
   const saveConvidadosToStorage = (updated: CanalConvidado[]) => {
     setConvidados(updated);
     localStorage.setItem('sigep_canais_convidados_v1', JSON.stringify(updated));
+    window.dispatchEvent(new Event('storage'));
+    window.dispatchEvent(new CustomEvent('sigep_chat_updated'));
   };
+
+  // Synchronize messages and channel invitations in real-time
+  useEffect(() => {
+    const syncChat = () => {
+      try {
+        const savedMsgs = localStorage.getItem('sigep_log_comunicacao_interna_v2');
+        if (savedMsgs) {
+          const parsed = JSON.parse(savedMsgs);
+          if (Array.isArray(parsed)) {
+            setMessages(parsed);
+          }
+        }
+        const savedConv = localStorage.getItem('sigep_canais_convidados_v1');
+        if (savedConv) {
+          const parsedConv = JSON.parse(savedConv);
+          if (Array.isArray(parsedConv)) {
+            setConvidados(parsedConv);
+          }
+        }
+      } catch (e) {
+        console.error("Erro ao sincronizar Chat em tempo real:", e);
+      }
+    };
+
+    window.addEventListener('storage', syncChat);
+    window.addEventListener('sigep_chat_updated', syncChat);
+    const interval = setInterval(syncChat, 1500);
+
+    return () => {
+      window.removeEventListener('storage', syncChat);
+      window.removeEventListener('sigep_chat_updated', syncChat);
+      clearInterval(interval);
+    };
+  }, []);
 
   // Scroll to bottom
   useEffect(() => {

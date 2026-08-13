@@ -30,6 +30,7 @@ interface PautaTrimesterProps {
   loggedInStaff?: Staff | null;
   schoolSettings?: any;
   activeModality?: 'ENSINO_PRIMARIO' | 'PUNIV' | 'MAGISTERIO';
+  selectedSpecialty?: string;
   useNpp?: boolean;
   onToggleNpp?: (val: boolean) => void;
   foreignLanguageProp?: 'INGLÊS' | 'FRANCÊS';
@@ -48,6 +49,7 @@ export default function PautaTrimester({
   loggedInStaff = null,
   schoolSettings,
   activeModality,
+  selectedSpecialty,
   useNpp = false,
   onToggleNpp,
   foreignLanguageProp
@@ -152,7 +154,7 @@ export default function PautaTrimester({
     let filledCells = 0;
     
     classStudents.forEach(student => {
-      const studentSubjects = getSubjectsForStudent(student, activeModality);
+      const studentSubjects = getSubjectsForStudent(student, activeModality, activeSpecialty);
       totalCells += studentSubjects.length * 2; // both mac and npt
       
       studentSubjects.forEach(sub => {
@@ -186,6 +188,20 @@ export default function PautaTrimester({
   // --- SECURITY GATE STATE FOR PROFESSOR ROLE ---
   const isProfessorRole = userRole === 'PROFESSOR' || (loggedInStaff && loggedInStaff.role === 'PROFESSOR');
   
+  const [grelhaVersion, setGrelhaVersion] = useState<number>(0);
+
+  useEffect(() => {
+    const handleGrelhaEvent = () => setGrelhaVersion(v => v + 1);
+    window.addEventListener('sigep_grelha_updated', handleGrelhaEvent);
+    window.addEventListener('sigep:data-updated', handleGrelhaEvent);
+    window.addEventListener('storage', handleGrelhaEvent);
+    return () => {
+      window.removeEventListener('sigep_grelha_updated', handleGrelhaEvent);
+      window.removeEventListener('sigep:data-updated', handleGrelhaEvent);
+      window.removeEventListener('storage', handleGrelhaEvent);
+    };
+  }, []);
+
   const [profInputId, setProfInputId] = useState<string>('');
   const [profValidated, setProfValidated] = useState<boolean>(false);
   const [validatedProfId, setValidatedProfId] = useState<string>('');
@@ -534,8 +550,17 @@ Validade: 2 Minutos (Expira em: ${new Date(newUnlock.expiresAt).toLocaleTimeStri
     };
 
     const currentReqs = JSON.parse(localStorage.getItem('sigep_grade_requests_v1') || '[]');
-    localStorage.setItem('sigep_grade_requests_v1', JSON.stringify([...currentReqs, newReq]));
+    const updatedReqs = [...currentReqs, newReq];
+    localStorage.setItem('sigep_grade_requests_v1', JSON.stringify(updatedReqs));
     window.dispatchEvent(new Event('storage'));
+    window.dispatchEvent(new CustomEvent('sigep_request_created', { detail: newReq }));
+
+    // Sync request with Central Server (PostgreSQL) for LAN/Wi-Fi propagation to Director General
+    fetch('/api/grade_requests', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updatedReqs)
+    }).catch(err => console.warn('Erro ao sincronizar solicitação com o servidor central:', err));
 
     // Write internal log message in the chat automatically
     try {
@@ -556,6 +581,7 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
         timestamp: new Date().toISOString()
       };
       localStorage.setItem('sigep_log_comunicacao_interna_v2', JSON.stringify([...chatLogs, reqMsg]));
+      window.dispatchEvent(new CustomEvent('sigep_chat_updated'));
     } catch (e) {
       console.error(e);
     }
@@ -625,7 +651,7 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
 
   // Find specialty of the current class/section
   const sectionStudents = students.filter(s => s.class === currentClass && s.section === currentSection);
-  const activeSpecialty = getSpecialtyFromSection(currentSection, activeModality);
+  const activeSpecialty = selectedSpecialty || sectionStudents.find(s => s.specialty)?.specialty || getSpecialtyFromSection(currentSection, activeModality);
 
   // Active subjects list, restricted if Professor is validated
   const classSubjects = getSubjectsForClass(currentClass, activeModality, activeSpecialty);
@@ -1344,7 +1370,7 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
         ];
 
         // Montar a estrutura AlunoPauta para validação de Observação baseada estritamente nas disciplinas do aluno
-        const studentRealSubjects = getSubjectsForStudent(student, activeModality);
+        const studentRealSubjects = getSubjectsForStudent(student, activeModality, activeSpecialty);
         const studentDisciplinas: NotaDisciplina[] = studentRealSubjects.map((sub) => {
           const score = getGradeRecord(student.id, sub as SubjectType);
           const escala = activeModality === 'ENSINO_PRIMARIO' ? 10 : 20;
@@ -1366,7 +1392,8 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
         };
 
         const tipoClasse: TipoClasse = ['6', '9', '12'].includes(currentClass) ? 'EXAME' : 'CONTINUA';
-        const obs = student.status === 'Desistente' ? 'Desistente' : calcularObservacaoPauta(studentPauta, tipoClasse);
+        const isTransfOrDesistPDF = student.status === 'Desistente' || student.isTransferidoSaida || (student.status as string) === 'TRANSFERIDO_SAIDA';
+        const obs = isTransfOrDesistPDF ? 'Desistente' : calcularObservacaoPauta(studentPauta, tipoClasse);
 
         // Adicionar notas do aluno
         activeSubjects.forEach((sub) => {
@@ -1583,7 +1610,8 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
         };
 
         const tipoClasse: TipoClasse = ['6', '9', '12'].includes(currentClass) ? 'EXAME' : 'CONTINUA';
-        const obs = calcularObservacaoPauta(studentPauta, tipoClasse);
+        const isTransfOrDesistStats = student.status === 'Desistente' || student.isTransferidoSaida || (student.status as string) === 'TRANSFERIDO_SAIDA';
+        const obs = isTransfOrDesistStats ? 'Desistente' : calcularObservacaoPauta(studentPauta, tipoClasse);
         const isApto = obs === 'Apto' || obs === 'Transita';
 
         if (student.gender === 'M') {
@@ -2760,7 +2788,8 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
                           disciplinas: studentDisciplinas
                         };
                         const tipoClasse: TipoClasse = ['6', '9', '12'].includes(currentClass) ? 'EXAME' : 'CONTINUA';
-                        const obs = student.status === 'Desistente' ? 'Desistente' : calcularObservacaoPauta(studentPauta, tipoClasse);
+                        const isTransfOrDesistWeb = student.status === 'Desistente' || student.isTransferidoSaida || (student.status as string) === 'TRANSFERIDO_SAIDA';
+                        const obs = isTransfOrDesistWeb ? 'Desistente' : calcularObservacaoPauta(studentPauta, tipoClasse);
 
                         return (
                           <td className="border border-slate-200 text-center text-xs font-bold px-3">

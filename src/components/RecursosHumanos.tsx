@@ -4,13 +4,16 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Staff, StaffRole, SubjectType, ModalityType, SchoolSettings, getSubjectsForClass, carregarGrelhaCurricular, getSpecialtyFullName } from '../types';
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
+import { Staff, StaffRole, SubjectType, ModalityType, SchoolSettings, getSubjectsForClass, carregarGrelhaCurricular, getSpecialtyFullName, PontoRecord } from '../types';
 import { formatarNomeProprio } from '../utils/pautaLogic';
 import { 
   Users, 
   UserPlus, 
   Trash2, 
   Search, 
+  Shield,
   ShieldCheck, 
   BookOpen, 
   Sparkles,
@@ -20,6 +23,10 @@ import {
   ChevronDown,
   Lock,
   CheckCircle,
+  CheckCircle2,
+  XCircle,
+  Clock,
+  Info,
   AlertTriangle,
   Award,
   Layers,
@@ -43,7 +50,8 @@ import {
   ShieldAlert,
   Phone,
   Eye,
-  LayoutGrid
+  LayoutGrid,
+  Save
 } from 'lucide-react';
 import { generateStaffId, getSectionsList } from '../utils';
 
@@ -94,6 +102,55 @@ const ROLE_INITIALS: Record<StaffRole, string> = {
 };
 
 type AbaRHType = 'CHEFIA' | 'COORDENACAO' | 'PROFESSORES' | 'LIMPEZA' | 'SEGURANCA' | 'TODOS';
+
+const formatarDataISO = (dateStr?: string) => {
+  if (!dateStr) return '';
+  const clean = dateStr.trim();
+  if (!clean) return '';
+
+  // Standard YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(clean)) {
+    return clean;
+  }
+
+  // Handle DD/MM/YYYY or YYYY/MM/DD
+  if (clean.includes('/')) {
+    const parts = clean.split('/');
+    if (parts.length === 3) {
+      if (parts[2].length === 4) { // DD/MM/YYYY
+        return `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+      } else if (parts[0].length === 4) { // YYYY/MM/DD
+        return `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
+      }
+    }
+  }
+
+  // Handle DD-MM-YYYY
+  if (clean.includes('-')) {
+    const parts = clean.split('-');
+    if (parts.length === 3) {
+      if (parts[2].length === 4) { // DD-MM-YYYY
+        return `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+      }
+    }
+  }
+
+  return clean;
+};
+
+const formatarDataBR = (dateStr?: string) => {
+  if (!dateStr) return '—';
+  if (dateStr.includes('-')) {
+    const parts = dateStr.split('-');
+    if (parts.length === 3) {
+      const [y, m, d] = parts;
+      if (y.length === 4) {
+        return `${d.padStart(2, '0')}/${m.padStart(2, '0')}/${y}`;
+      }
+    }
+  }
+  return dateStr;
+};
 
 const CATEGORY_LABELS: Record<AbaRHType, string> = {
   CHEFIA: 'Cargos de Chefia',
@@ -210,7 +267,7 @@ export default function RecursosHumanos({
   }, [activeTabRH, isAdding]);
 
   // Navegação Principal de RH por CARDS
-  type RhViewMode = 'DASHBOARD' | 'MAPA_EFETIVIDADE' | 'ATRIBUICOES' | 'FUNCIONARIOS' | 'CHEFIA' | 'SEGURANCA';
+  type RhViewMode = 'DASHBOARD' | 'MAPA_EFETIVIDADE' | 'PONTO_DIGITAL' | 'ATRIBUICOES' | 'FUNCIONARIOS' | 'CHEFIA' | 'SEGURANCA';
   const [rhViewMode, setRhViewMode] = useState<RhViewMode>('DASHBOARD');
 
   // Estados do Mapa de Efetividade
@@ -227,6 +284,8 @@ export default function RecursosHumanos({
   const [efetividadeHabilitacoes, setEfetividadeHabilitacoes] = useState('');
   const [efetividadeGenero, setEfetividadeGenero] = useState<'M' | 'F'>('M');
   const [efetividadeEspecialidade, setEfetividadeEspecialidade] = useState('');
+  const [efetividadeEspecialidadeMedio, setEfetividadeEspecialidadeMedio] = useState('');
+  const [efetividadeEspecialidadeSuperior, setEfetividadeEspecialidadeSuperior] = useState('');
   const [efetividadeUnidadeOrganica, setEfetividadeUnidadeOrganica] = useState('');
   const [efetividadeNumAgente, setEfetividadeNumAgente] = useState('');
 
@@ -249,10 +308,115 @@ export default function RecursosHumanos({
   const [newTempoServico, setNewTempoServico] = useState('');
   const [newDataNascimento, setNewDataNascimento] = useState('');
   const [newNumSeguroSocial, setNewNumSeguroSocial] = useState('');
-  const [newHabilitacoesLiterarias, setNewHabilitacoesLiterarias] = useState('Licenciatura');
-  const [newGenero, setNewGenero] = useState<'M' | 'F' | 'Masculino' | 'Feminino'>('M');
+  const [newHabilitacoesLiterarias, setNewHabilitacoesLiterarias] = useState('');
+  const [newHabilitacoesMedio, setNewHabilitacoesMedio] = useState('');
+  const [newHabilitacoesSuperior, setNewHabilitacoesSuperior] = useState('');
+  const [newPeriodoTrabalho, setNewPeriodoTrabalho] = useState<'MATINAL' | 'VESPERTINO' | 'NOTURNO' | 'ADMINISTRATIVO' | ''>('');
+  const [newGenero, setNewGenero] = useState<'M' | 'F' | 'Masculino' | 'Feminino' | ''>('');
   const [newUnidadeOrganica, setNewUnidadeOrganica] = useState('');
   const [newNumAgente, setNewNumAgente] = useState('');
+
+  // Estados do Ponto Digital & Assiduidade
+  const [pontoRecords, setPontoRecords] = useState<PontoRecord[]>(() => {
+    try {
+      const raw = localStorage.getItem('sigep_ponto_digital_records');
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [pontoSelectedDate, setPontoSelectedDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
+  const [pontoFiltroTurno, setPontoFiltroTurno] = useState<string>('TODOS');
+  const [pontoEsclarecimentoModalRecord, setPontoEsclarecimentoModalRecord] = useState<PontoRecord | null>(null);
+  const [pontoEsclarecimentoMotivo, setPontoEsclarecimentoMotivo] = useState<string>('');
+  const [pontoJustificativaModalRecord, setPontoJustificativaModalRecord] = useState<PontoRecord | null>(null);
+  const [pontoJustificativaTexto, setPontoJustificativaTexto] = useState<string>('');
+  const [showRelatorioFaltasModal, setShowRelatorioFaltasModal] = useState<boolean>(false);
+
+  // Determinar autorização oficial de marcação de faltas conforme o perfil do utilizador logado
+  const canUserManagePontoFor = (targetStaff: Staff): boolean => {
+    const myRole = loggedInStaff?.role || userRole;
+    const myTurnoStr = String(loggedInStaff?.turnoCoordenado || loggedInStaff?.periodoTrabalho || 'MATINAL');
+    const myTurno = (myTurnoStr === 'Manhã' || myTurnoStr === 'Manha') ? 'MATINAL'
+      : (myTurnoStr === 'Tarde') ? 'VESPERTINO'
+      : (myTurnoStr === 'Noite') ? 'NOTURNO'
+      : myTurnoStr;
+    
+    const targetTurnoStr = String(targetStaff.periodoTrabalho || 'MATINAL');
+    const targetTurno = (targetTurnoStr === 'Manhã' || targetTurnoStr === 'Manha') ? 'MATINAL'
+      : (targetTurnoStr === 'Tarde') ? 'VESPERTINO'
+      : (targetTurnoStr === 'Noite') ? 'NOTURNO'
+      : targetTurnoStr;
+
+    if (myRole === 'DIRECTOR_GERAL') {
+      // O Director Geral marca falta apenas aos colaboradores directos:
+      // Subdirectores, Técnicos Administrativos, Chefe de Secretaria e Coordenadores
+      const directRoles = [
+        'SUB_DIRECTOR_PEDAGOGICO',
+        'SUB_DIRECTOR_ADMINISTRATIVO',
+        'CHEFE_SECRETARIA',
+        'TECNICO_ADMINISTRATIVO',
+        'COORDENADOR_TURNO',
+        'COORDENADOR_DISCIPLINA',
+        'COORDENADOR_PRATICAS_PEDAGOGICAS',
+        'COORDENADOR'
+      ];
+      return directRoles.includes(targetStaff.role);
+    }
+
+    if (myRole === 'COORDENADOR_TURNO' || myRole === 'COORDENADOR') {
+      // O Coordenador do Turno marca falta aos PROFESSORES do seu turno de trabalho
+      if (targetStaff.role === 'PROFESSOR') {
+        return myTurno === 'TODOS' || targetTurno === myTurno;
+      }
+      return false;
+    }
+
+    if (myRole === 'SUB_DIRECTOR_ADMINISTRATIVO') {
+      // Subdirector Administrativo (RH) pode gerir todas as faltas e assiduidade global
+      return true;
+    }
+
+    if (myRole === 'SUB_DIRECTOR_PEDAGOGICO') {
+      return targetStaff.role === 'PROFESSOR' || targetStaff.role.includes('COORDENADOR');
+    }
+
+    // Para outros utilizadores com permissão de escrita
+    return canEdit;
+  };
+
+  // Sincronização e Persistência do Ponto Digital no Servidor Central e LocalStorage
+  useEffect(() => {
+    const syncLocalPonto = () => {
+      try {
+        const raw = localStorage.getItem('sigep_ponto_digital_records');
+        if (raw) setPontoRecords(JSON.parse(raw));
+      } catch {}
+    };
+    window.addEventListener('sigep_ponto_updated', syncLocalPonto);
+    window.addEventListener('sigep:data-updated', syncLocalPonto);
+    return () => {
+      window.removeEventListener('sigep_ponto_updated', syncLocalPonto);
+      window.removeEventListener('sigep:data-updated', syncLocalPonto);
+    };
+  }, []);
+
+  const savePontoRecordsState = (updated: PontoRecord[]) => {
+    setPontoRecords(updated);
+    try {
+      localStorage.setItem('sigep_ponto_digital_records', JSON.stringify(updated));
+      window.dispatchEvent(new CustomEvent('sigep_ponto_updated', { detail: updated }));
+      window.dispatchEvent(new CustomEvent('sigep:data-updated'));
+    } catch (err) {
+      console.error('Erro ao guardar ponto digital:', err);
+    }
+
+    fetch('/api/ponto_records', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updated)
+    }).catch(err => console.warn('Erro ao sincronizar ponto digital com o servidor central:', err));
+  };
 
   const [newGabinete, setNewGabinete] = useState('');
   const [newDecretoNomeacao, setNewDecretoNomeacao] = useState('');
@@ -528,11 +692,14 @@ export default function RecursosHumanos({
     setNewNumAgente(staff.numAgente || '');
     setNewCategoria(staff.categoria || '');
     setNewTempoServico(staff.tempoServico || '');
-    setNewDataNascimento(staff.dataNascimento || '');
+    setNewDataNascimento(formatarDataISO(staff.dataNascimento));
     setNewNumSeguroSocial(staff.numSeguroSocial || '');
-    setNewHabilitacoesLiterarias(staff.habilitacoesLiterarias || 'Licenciatura');
+    setNewHabilitacoesLiterarias(staff.habilitacoesLiterarias || 'Licenciado');
+    setNewHabilitacoesMedio(staff.habilitacoesMedio || staff.specialtyMedio || '');
+    setNewHabilitacoesSuperior(staff.habilitacoesSuperior || staff.specialtySuperior || '');
+    setNewPeriodoTrabalho(staff.periodoTrabalho || 'MATINAL');
     setNewGenero((staff.genero === 'F' || staff.genero === 'Feminino') ? 'F' : 'M');
-    setNewUnidadeOrganica(staff.unidadeOrganica || staff.gabinete || '');
+    setNewUnidadeOrganica(staff.unidadeOrganica || staff.gabinete || schoolSettings?.schoolName || '');
 
     setNewGabinete(staff.gabinete || '');
     setNewDecretoNomeacao(staff.decretoNomeacao || '');
@@ -559,8 +726,11 @@ export default function RecursosHumanos({
     setNewTempoServico('');
     setNewDataNascimento('');
     setNewNumSeguroSocial('');
-    setNewHabilitacoesLiterarias('Licenciatura');
-    setNewGenero('M');
+    setNewHabilitacoesMedio('');
+    setNewHabilitacoesSuperior('');
+    setNewPeriodoTrabalho('');
+    setNewHabilitacoesLiterarias('');
+    setNewGenero('');
     setNewUnidadeOrganica('');
     setFormError('');
   };
@@ -582,9 +752,12 @@ export default function RecursosHumanos({
       setNewNumAgente(staff.numAgente || '');
       setNewCategoria(staff.categoria || '');
       setNewTempoServico(staff.tempoServico || '');
-      setNewDataNascimento(staff.dataNascimento || '');
+      setNewDataNascimento(formatarDataISO(staff.dataNascimento));
       setNewNumSeguroSocial(staff.numSeguroSocial || '');
-      setNewHabilitacoesLiterarias(staff.habilitacoesLiterarias || 'Licenciatura');
+      setNewHabilitacoesLiterarias(staff.habilitacoesLiterarias || 'Licenciado');
+      setNewHabilitacoesMedio(staff.habilitacoesMedio || staff.specialtyMedio || '');
+      setNewHabilitacoesSuperior(staff.habilitacoesSuperior || staff.specialtySuperior || '');
+      setNewPeriodoTrabalho(staff.periodoTrabalho || 'MATINAL');
       setNewGenero((staff.genero === 'F' || staff.genero === 'Feminino') ? 'F' : 'M');
       setNewUnidadeOrganica(staff.unidadeOrganica || staff.gabinete || '');
     } else {
@@ -637,12 +810,58 @@ export default function RecursosHumanos({
 
     const cleanPhone = newContact.replace(/\D/g, '');
     if (!cleanPhone || cleanPhone.length < 9) {
-      setFormError('O Número de Telefone / Contacto do funcionário é obrigatório para efeitos de validação e segurança (mínimo 9 dígitos).');
+      setFormError('O Número de Telefone / Contacto do funcionário é de preenchimento obrigatório (mínimo 9 dígitos).');
       return;
     }
 
-    if (newIsEfetivo && (!newNumAgente || !newNumAgente.trim())) {
-      setFormError('O Nº de Agente do Estado é obrigatório para funcionários efetivos.');
+    if (!newDataNascimento || !newDataNascimento.trim()) {
+      setFormError('A Data de Nascimento é de preenchimento obrigatório.');
+      return;
+    }
+
+    if (!newPeriodoTrabalho) {
+      setFormError('O Período / Turno de Trabalho é de preenchimento obrigatório.');
+      return;
+    }
+
+    if (!newGenero) {
+      setFormError('O Género é de preenchimento obrigatório.');
+      return;
+    }
+
+    if (!newHabilitacoesLiterarias) {
+      setFormError('As Habilitações Literárias são de preenchimento obrigatório.');
+      return;
+    }
+
+    if (newIsEfetivo) {
+      if (!newNumAgente || !newNumAgente.trim()) {
+        setFormError('O Nº de Agente do Estado é de preenchimento obrigatório para funcionários efetivos.');
+        return;
+      }
+      if (!newNumSeguroSocial || !newNumSeguroSocial.trim()) {
+        setFormError('O Nº de Seguro Social (INSS) é de preenchimento obrigatório para funcionários efetivos.');
+        return;
+      }
+      if (!newCategoria || !newCategoria.trim()) {
+        setFormError('A Categoria (Grau da Função Pública) é de preenchimento manual obrigatório para funcionários efetivos.');
+        return;
+      }
+    }
+
+    if (!newTempoServico || !newTempoServico.trim()) {
+      setFormError('O Tempo de Serviço é de preenchimento manual obrigatório (até 65 anos).');
+      return;
+    }
+
+    const tsChefiaVal = parseInt(newTempoServico.replace(/\D/g, ''), 10);
+    if (!isNaN(tsChefiaVal) && (tsChefiaVal < 0 || tsChefiaVal > 65)) {
+      setFormError('O Tempo de Serviço não pode ultrapassar os 65 anos.');
+      return;
+    }
+
+    if (!newHabilitacoesMedio.trim() && !newHabilitacoesSuperior.trim()) {
+      setFormError('As Habilitações Literárias (Coluna A - Médio ou Coluna B - Superior) são de preenchimento obrigatório.');
       return;
     }
 
@@ -665,14 +884,19 @@ export default function RecursosHumanos({
       gabinete: newGabinete.trim() || undefined,
       decretoNomeacao: newDecretoNomeacao.trim() || undefined,
       isEfetivo: newIsEfetivo,
-      numAgente: newIsEfetivo ? newNumAgente.trim() : undefined,
-      categoria: newCategoria.trim() || undefined,
+      numAgente: newIsEfetivo ? (newNumAgente.trim() || undefined) : undefined,
+      categoria: newIsEfetivo ? (newCategoria.trim() || undefined) : undefined,
       tempoServico: newTempoServico.trim() || undefined,
+      numSeguroSocial: newIsEfetivo ? (newNumSeguroSocial.trim() || undefined) : undefined,
       dataNascimento: newDataNascimento.trim() || undefined,
-      numSeguroSocial: newNumSeguroSocial.trim() || undefined,
       habilitacoesLiterarias: newHabilitacoesLiterarias.trim() || undefined,
+      habilitacoesMedio: newHabilitacoesMedio.trim() || undefined,
+      habilitacoesSuperior: newHabilitacoesSuperior.trim() || undefined,
+      specialtyMedio: newHabilitacoesMedio.trim() || undefined,
+      specialtySuperior: newHabilitacoesSuperior.trim() || undefined,
+      periodoTrabalho: newPeriodoTrabalho,
       genero: newGenero,
-      unidadeOrganica: newUnidadeOrganica.trim() || newGabinete.trim() || undefined
+      unidadeOrganica: newUnidadeOrganica.trim() || newGabinete.trim() || schoolSettings?.schoolName || undefined
     }, chefiaEditStaffId || undefined);
 
     window.alert(`Funcionário de Chefia gravado com sucesso! ID: ${candidateId}`);
@@ -682,6 +906,379 @@ export default function RecursosHumanos({
     setIsChefiaFormEditing(false);
     setChefiaEditStaffId(null);
     clearChefiaFields();
+  };
+
+  const renderChefiaForm = (isUnivalente: boolean = false) => {
+    return (
+      <form onSubmit={handleChefiaSubmit} className="space-y-4">
+        <div className="space-y-4 bg-slate-50 border border-slate-200 p-4 sm:p-5 rounded-2xl">
+          <h3 className="text-xs font-black text-slate-800 uppercase flex items-center gap-1.5 border-b border-slate-200 pb-2.5 mb-3">
+            <Sparkles className="w-4 h-4 text-indigo-600" />
+            <span>
+              {chefiaEditStaffId
+                ? (isUnivalente ? 'Editar Cadastro de Chefia' : 'Editar Cadastro de Técnico')
+                : (isUnivalente ? 'Nomear Titular para o Cargo' : 'Adicionar Novo Técnico')}
+            </span>
+          </h3>
+
+          {/* DADOS BIOGRÁFICOS E ACESSO */}
+          <div className="space-y-3">
+            <span className="text-[10px] font-black uppercase tracking-wider text-indigo-800 bg-indigo-50 px-2.5 py-1 rounded-md border border-indigo-100 flex items-center gap-1.5 w-fit">
+              <User className="w-3.5 h-3.5 text-indigo-600" />
+              <span>1. Dados Biográficos & Acesso de Segurança</span>
+            </span>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                {isUnivalente ? 'Nome Completo do Titular *' : 'Nome Completo do Técnico *'}
+              </label>
+              <input
+                type="text"
+                required
+                value={newName}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setNewName(val);
+                  if (!chefiaEditStaffId && selectedChefiaRole) {
+                    setNewId(generateStaffId(val || (isUnivalente ? 'Novo' : 'Tecnico'), selectedChefiaRole, staffList.map(s => s.id)));
+                  }
+                }}
+                onBlur={() => {
+                  const formatted = formatarNomeProprio(newName);
+                  setNewName(formatted);
+                  if (!chefiaEditStaffId && selectedChefiaRole) {
+                    setNewId(generateStaffId(formatted || (isUnivalente ? 'Novo' : 'Tecnico'), selectedChefiaRole, staffList.map(s => s.id)));
+                  }
+                }}
+                autoCapitalize="words"
+                placeholder={isUnivalente ? "Ex: Manuel António Chilombo" : "Ex: Maria Domingos Cabral"}
+                className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2 text-xs font-semibold text-slate-800 focus:outline-hidden focus:border-indigo-500"
+              />
+              <p className="mt-1 text-[10px] text-slate-500">
+                O sistema formata automaticamente as iniciais em maiúsculas conforme a norma ortográfica.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">ID de Início de Sessão *</label>
+                <input
+                  type="text"
+                  required
+                  value={newId}
+                  disabled={!!chefiaEditStaffId}
+                  onChange={(e) => setNewId(e.target.value.trim().toUpperCase())}
+                  placeholder="Ex: DIR001"
+                  className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2 text-xs font-mono font-extrabold text-indigo-700 focus:outline-hidden focus:border-indigo-500 disabled:opacity-50"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Senha d'Acesso *</label>
+                <input
+                  type="text"
+                  required
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  placeholder="Padrão: 12345"
+                  className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2 text-xs font-mono font-bold text-slate-800 focus:outline-hidden focus:border-indigo-500"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Contacto Telefónico *</label>
+                <input
+                  type="tel"
+                  required
+                  value={newContact}
+                  onChange={(e) => setNewContact(e.target.value)}
+                  placeholder="Ex: 923 456 789"
+                  className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2 text-xs font-mono font-bold text-slate-800 focus:outline-hidden focus:border-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Data de Nascimento *</label>
+                <input
+                  type="date"
+                  required
+                  value={newDataNascimento}
+                  onChange={(e) => setNewDataNascimento(e.target.value)}
+                  className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2 text-xs font-semibold text-slate-800 focus:outline-hidden focus:border-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Género *</label>
+                <select
+                  value={newGenero}
+                  onChange={(e) => setNewGenero(e.target.value as 'M' | 'F')}
+                  className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2 text-xs font-bold text-slate-800 focus:outline-hidden focus:border-indigo-500 cursor-pointer"
+                >
+                  <option value="">-- Selecione o Género --</option>
+                  <option value="M">Masculino (M)</option>
+                  <option value="F">Feminino (F)</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* DADOS DE CHEFIA & GABINETE */}
+          <div className="space-y-3 pt-3 border-t border-slate-200">
+            <span className="text-[10px] font-black uppercase tracking-wider text-amber-800 bg-amber-50 px-2.5 py-1 rounded-md border border-amber-200 flex items-center gap-1.5 w-fit">
+              <Shield className="w-3.5 h-3.5 text-amber-600" />
+              <span>2. Atribuição de Chefia & Diploma de Nomeação</span>
+            </span>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Gabinete / Departamento</label>
+                <input
+                  type="text"
+                  value={newGabinete}
+                  onChange={(e) => setNewGabinete(e.target.value)}
+                  placeholder={isUnivalente ? "Ex: Gabinete de Direcção" : "Ex: Secretaria Pedagógica / Balcão A"}
+                  className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2 text-xs font-semibold text-slate-800 focus:outline-hidden focus:border-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Decreto / Despacho de Nomeação</label>
+                <input
+                  type="text"
+                  value={newDecretoNomeacao}
+                  onChange={(e) => setNewDecretoNomeacao(e.target.value)}
+                  placeholder={isUnivalente ? "Ex: Despacho Nº 105/MED-2025" : "Ex: Contrato de Trabalho Nº 45/2026"}
+                  className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2 text-xs font-semibold text-slate-800 focus:outline-hidden focus:border-indigo-500"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* VÍNCULO INSTITUCIONAL & MAPA DE EFETIVIDADE */}
+          <div className="space-y-3 pt-3 border-t border-slate-200">
+            <span className="text-[10px] font-black uppercase tracking-wider text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded-md border border-emerald-200 flex items-center gap-1.5 w-fit">
+              <Building className="w-3.5 h-3.5 text-emerald-600" />
+              <span>3. Vínculo Institucional & Dados do Mapa de Efetividade (RH)</span>
+            </span>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">É Funcionário Efetivo? *</label>
+                <select
+                  value={newIsEfetivo ? 'SIM' : 'NAO'}
+                  onChange={(e) => {
+                    const isEf = e.target.value === 'SIM';
+                    setNewIsEfetivo(isEf);
+                    if (!isEf) {
+                      setNewNumAgente('');
+                      setNewNumSeguroSocial('');
+                    }
+                  }}
+                  className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2 text-xs font-bold text-slate-800 focus:outline-hidden focus:border-indigo-500 cursor-pointer"
+                >
+                  <option value="SIM">Sim (Efetivo)</option>
+                  <option value="NAO">Não (Contratado)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Unidade Orgânica (Escola) *</label>
+                <input
+                  type="text"
+                  required
+                  value={newUnidadeOrganica || schoolSettings?.schoolName || ''}
+                  onChange={(e) => setNewUnidadeOrganica(e.target.value)}
+                  placeholder={schoolSettings?.schoolName || "Ex: Complexo Escolar Nº 1709 L"}
+                  className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2 text-xs font-semibold text-slate-800 focus:outline-hidden focus:border-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Período / Turno de Trabalho *</label>
+                <select
+                  value={newPeriodoTrabalho}
+                  onChange={(e) => setNewPeriodoTrabalho(e.target.value as any)}
+                  className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2 text-xs font-bold text-slate-800 focus:outline-hidden focus:border-indigo-500 cursor-pointer"
+                >
+                  <option value="">-- Selecione o Turno --</option>
+                  <option value="MATINAL">Matinal / Laboral (07:30 - 12:30)</option>
+                  <option value="VESPERTINO">Vespertino / Tarde (12:30 - 17:30)</option>
+                  <option value="NOTURNO">Noturno / Noite (18:00 - 21:00)</option>
+                  <option value="ADMINISTRATIVO">Administrativo (08:30 - 14:00)</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+              {newIsEfetivo && (
+                <div>
+                  <label className="block text-xs font-bold text-slate-800 mb-1">Nº de Agente *</label>
+                  <input
+                    type="text"
+                    required={newIsEfetivo}
+                    value={newNumAgente}
+                    onChange={(e) => setNewNumAgente(e.target.value)}
+                    placeholder="Ex: 849204"
+                    className="w-full bg-emerald-50/40 border border-emerald-300 rounded-xl px-3.5 py-2 text-xs font-mono font-black text-slate-900 focus:outline-hidden focus:border-emerald-500"
+                  />
+                </div>
+              )}
+
+              {newIsEfetivo && (
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Categoria (Grau F.P.) *</label>
+                  <input
+                    type="text"
+                    required={newIsEfetivo}
+                    value={newCategoria}
+                    onChange={(e) => setNewCategoria(e.target.value)}
+                    placeholder="Ex: 6º Grau / Tég. Médio"
+                    list="list-categorias-chefia"
+                    className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2 text-xs font-semibold text-slate-800 focus:outline-hidden focus:border-indigo-500"
+                  />
+                  <datalist id="list-categorias-chefia">
+                    <option value="3º Grau" />
+                    <option value="4º Grau" />
+                    <option value="6º Grau" />
+                    <option value="9º Grau" />
+                    <option value="13º Grau" />
+                    <option value="Técnico Superior de 1ª Classe" />
+                    <option value="Técnico Superior de 2ª Classe" />
+                    <option value="Técnico Médio de 1ª Classe" />
+                    <option value="Técnico Médio de 2ª Classe" />
+                    <option value="Prof. do Ensino Primário e Secundário" />
+                    <option value="Auxiliar de Serviços Gerais" />
+                  </datalist>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Tempo de Serviço *</label>
+                <input
+                  type="text"
+                  required
+                  value={newTempoServico}
+                  onChange={(e) => setNewTempoServico(e.target.value)}
+                  placeholder="Ex: 12 Anos"
+                  list="list-tempo-servico-chefia"
+                  className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2 text-xs font-semibold text-slate-800 focus:outline-hidden focus:border-indigo-500"
+                />
+                <datalist id="list-tempo-servico-chefia">
+                  {Array.from({ length: 65 }, (_, i) => `${i + 1} ${i === 0 ? 'Ano' : 'Anos'}`).map((val) => (
+                    <option key={val} value={val} />
+                  ))}
+                </datalist>
+              </div>
+
+              {newIsEfetivo && (
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Nº Seguro Social (INSS) *</label>
+                  <input
+                    type="text"
+                    required={newIsEfetivo}
+                    value={newNumSeguroSocial}
+                    onChange={(e) => setNewNumSeguroSocial(e.target.value)}
+                    placeholder="Ex: 00928374"
+                    className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2 text-xs font-mono font-semibold text-slate-800 focus:outline-hidden focus:border-indigo-500"
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* HABILITAÇÕES LITERÁRIAS & ACADÉMICAS */}
+          <div className="space-y-3 pt-3 border-t border-slate-200">
+            {/* SELECTOR DE HABILITAÇÕES LITERÁRIAS */}
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                Habilitações Literárias *
+              </label>
+              <select
+                value={newHabilitacoesLiterarias}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setNewHabilitacoesLiterarias(val);
+                  if (val === 'Técnico Médio') {
+                    setNewHabilitacoesSuperior('');
+                  }
+                }}
+                className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2 text-xs font-bold text-slate-800 focus:outline-hidden focus:border-indigo-500 cursor-pointer"
+              >
+                <option value="">-- Selecione as Habilitações --</option>
+                <option value="Técnico Médio">Técnico Médio</option>
+                <option value="Licenciado">Licenciado</option>
+                <option value="Mestre">Mestre</option>
+                <option value="Doutoramento (PHD)">Doutoramento (PHD)</option>
+              </select>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {/* ENSINO MÉDIO / TÉCNICO */}
+              <div className="bg-white border border-slate-200 p-3 rounded-xl space-y-1.5">
+                <label className="block text-[11px] font-bold text-slate-700 uppercase">
+                  Ensino Médio / Técnico *
+                </label>
+                <input
+                  type="text"
+                  value={newHabilitacoesMedio}
+                  onChange={(e) => setNewHabilitacoesMedio(e.target.value)}
+                  placeholder="Ex: Técnico Médio em Pedagogia / 12ª Cl."
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-xs text-slate-800 font-semibold focus:outline-hidden focus:border-indigo-500 focus:bg-white"
+                />
+              </div>
+
+              {/* ENSINO SUPERIOR / LICENCIATURA */}
+              <div className={`border p-3 rounded-xl space-y-1.5 transition-all ${
+                newHabilitacoesLiterarias === 'Técnico Médio' 
+                  ? 'bg-slate-100/70 border-slate-200 opacity-60' 
+                  : 'bg-white border-slate-200'
+              }`}>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase">
+                  Ensino Superior / Licenciatura {newHabilitacoesLiterarias !== 'Técnico Médio' && '*'}
+                </label>
+                <input
+                  type="text"
+                  disabled={newHabilitacoesLiterarias === 'Técnico Médio'}
+                  value={newHabilitacoesLiterarias === 'Técnico Médio' ? '' : newHabilitacoesSuperior}
+                  onChange={(e) => setNewHabilitacoesSuperior(e.target.value)}
+                  placeholder={
+                    newHabilitacoesLiterarias === 'Técnico Médio'
+                      ? 'Desativado (Apenas para Licenciado, Mestre ou PHD)'
+                      : 'Ex: Licenciatura em Ensino da Matemática'
+                  }
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-xs text-slate-800 font-semibold focus:outline-hidden focus:border-indigo-500 focus:bg-white disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2.5 pt-2">
+          <button
+            type="button"
+            onClick={() => {
+              setIsChefiaFormEditing(false);
+              if (!chefiaEditStaffId) {
+                setSelectedChefiaRole(null);
+              }
+            }}
+            className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all cursor-pointer"
+          >
+            Cancelar
+          </button>
+          <button
+            type="submit"
+            className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
+          >
+            <Save className="w-4 h-4" />
+            <span>{chefiaEditStaffId ? 'Salvar Alterações' : (isUnivalente ? 'Confirmar Nomeação' : 'Cadastrar Técnico')}</span>
+          </button>
+        </div>
+      </form>
+    );
   };
 
   // Submissão do Formulário de RH com Pop-ups de Confirmação
@@ -746,12 +1343,63 @@ export default function RecursosHumanos({
 
     const cleanPhone = newContact.replace(/\D/g, '');
     if (!cleanPhone || cleanPhone.length < 9) {
-      setFormError('O Número de Telefone / Contacto do funcionário é obrigatório para efeitos de validação e segurança de acesso (mínimo 9 dígitos).');
+      setFormError('O Número de Telefone / Contacto do funcionário é de preenchimento obrigatório (mínimo 9 dígitos).');
       return;
     }
 
-    if (newIsEfetivo && (!newNumAgente || !newNumAgente.trim())) {
-      setFormError('O Nº de Agente do Estado é obrigatório para funcionários efetivos.');
+    if (!newDataNascimento || !newDataNascimento.trim()) {
+      setFormError('A Data de Nascimento é de preenchimento obrigatório.');
+      return;
+    }
+
+    if (!newPeriodoTrabalho) {
+      setFormError('O Período / Turno de Trabalho é de preenchimento obrigatório.');
+      return;
+    }
+
+    if (!newGenero) {
+      setFormError('O Género é de preenchimento obrigatório.');
+      return;
+    }
+
+    if (!newHabilitacoesLiterarias) {
+      setFormError('As Habilitações Literárias são de preenchimento obrigatório.');
+      return;
+    }
+
+    if (newIsEfetivo) {
+      if (!newNumAgente || !newNumAgente.trim()) {
+        setFormError('O Nº de Agente do Estado é de preenchimento obrigatório para funcionários efetivos.');
+        return;
+      }
+      if (!newNumSeguroSocial || !newNumSeguroSocial.trim()) {
+        setFormError('O Nº de Seguro Social (INSS) é de preenchimento obrigatório para funcionários efetivos.');
+        return;
+      }
+      if (!newCategoria || !newCategoria.trim()) {
+        setFormError('A Categoria (Grau da Função Pública) é de preenchimento manual obrigatório para funcionários efetivos.');
+        return;
+      }
+    }
+
+    if (!newTempoServico || !newTempoServico.trim()) {
+      setFormError('O Tempo de Serviço é de preenchimento manual obrigatório (até 65 anos).');
+      return;
+    }
+
+    const tsVal = parseInt(newTempoServico.replace(/\D/g, ''), 10);
+    if (!isNaN(tsVal) && (tsVal < 0 || tsVal > 65)) {
+      setFormError('O Tempo de Serviço não pode ultrapassar os 65 anos.');
+      return;
+    }
+
+    if (!newHabilitacoesMedio.trim() && !newHabilitacoesSuperior.trim()) {
+      setFormError('As Habilitações Literárias (Coluna A - Médio ou Coluna B - Superior) são de preenchimento obrigatório.');
+      return;
+    }
+
+    if (!newUnidadeOrganica.trim() && !schoolSettings?.schoolName) {
+      setFormError('A Unidade Orgânica (Escola) é de preenchimento obrigatório.');
       return;
     }
 
@@ -763,8 +1411,22 @@ export default function RecursosHumanos({
     }
 
     const isProf = newRole === 'PROFESSOR';
+    let finalAssignments = [...accumulatedAssignments];
+    if (wizardClass && wizardSubject && wizardSection) {
+      const existsInWizard = finalAssignments.some(
+        a => a.class === wizardClass && a.section === wizardSection && a.subject === wizardSubject
+      );
+      if (!existsInWizard) {
+        finalAssignments.push({
+          class: wizardClass,
+          section: wizardSection,
+          subject: wizardSubject,
+          specialty: selectedSpecialty
+        });
+      }
+    }
+
     if (isProf) {
-      const finalAssignments = accumulatedAssignments.length > 0 ? accumulatedAssignments : [];
       if (finalAssignments.length === 0 && (selectedClasses.length === 0 || selectedSections.length === 0 || selectedSubjects.length === 0)) {
         setFormError('Por favor adicione pelo menos uma Atribuição Curricular (Classe + Turma + Disciplina) para o Professor.');
         return;
@@ -798,20 +1460,26 @@ export default function RecursosHumanos({
 
     const finalPassword = newPassword.trim() || '12345';
 
+    const hasTeachingData = isProf || newRole.includes('COORDENADOR') || finalAssignments.length > 0 || selectedSubjects.length > 0;
+
+    const finalClasses = Array.from(new Set([...selectedClasses, ...finalAssignments.map(a => a.class)]));
+    const finalSections = Array.from(new Set([...selectedSections, ...finalAssignments.map(a => a.section)]));
+    const finalSubjects = Array.from(new Set([...selectedSubjects, ...(finalAssignments.map(a => a.subject) as SubjectType[])]));
+
     onAddStaff({
       id: candidateId,
       name: trimmedName,
       role: newRole,
       contact: newContact.trim(),
-      classes: isProf ? Array.from(new Set([...selectedClasses, ...accumulatedAssignments.map(a => a.class)])) : undefined,
-      sections: isProf ? Array.from(new Set([...selectedSections, ...accumulatedAssignments.map(a => a.section)])) : undefined,
-      subjects: isProf ? Array.from(new Set([...selectedSubjects, ...(accumulatedAssignments.map(a => a.subject) as SubjectType[])])) : undefined,
-      assignments: isProf ? (accumulatedAssignments.length > 0 ? accumulatedAssignments : (() => {
-        if (selectedClasses.length > 0 && selectedSections.length > 0 && selectedSubjects.length > 0) {
+      classes: hasTeachingData && finalClasses.length > 0 ? finalClasses : undefined,
+      sections: hasTeachingData && finalSections.length > 0 ? finalSections : undefined,
+      subjects: hasTeachingData && finalSubjects.length > 0 ? finalSubjects : undefined,
+      assignments: finalAssignments.length > 0 ? finalAssignments : (() => {
+        if (finalClasses.length > 0 && finalSections.length > 0 && finalSubjects.length > 0) {
           const rebuilt: { class: string; section: string; subject: string; specialty?: string }[] = [];
-          selectedClasses.forEach(c => {
-            selectedSections.forEach(sec => {
-              selectedSubjects.forEach(sub => {
+          finalClasses.forEach(c => {
+            finalSections.forEach(sec => {
+              finalSubjects.forEach(sub => {
                 rebuilt.push({ class: c, section: sec, subject: sub, specialty: selectedSpecialty });
               });
             });
@@ -819,27 +1487,30 @@ export default function RecursosHumanos({
           return rebuilt;
         }
         return undefined;
-      })()) : undefined,
-      specialty: isProf ? selectedSpecialty : undefined,
+      })(),
+      specialty: (isProf || selectedSpecialty) ? selectedSpecialty : undefined,
       password: finalPassword,
       
       // Passar novos campos detalhados de RH para a escola angolana & Mapa de Efetividade
       isEfetivo: newIsEfetivo,
-      categoria: newCategoria.trim() || undefined,
-      tempoServico: newTempoServico.trim() || undefined,
-      dataNascimento: newDataNascimento.trim() || undefined,
-      numSeguroSocial: newNumSeguroSocial.trim() || undefined,
-      habilitacoesLiterarias: newHabilitacoesLiterarias.trim() || undefined,
-      genero: newGenero,
-      unidadeOrganica: newUnidadeOrganica.trim() || undefined,
       numAgente: newIsEfetivo ? (newNumAgente.trim() || undefined) : undefined,
+      categoria: newIsEfetivo ? (newCategoria.trim() || undefined) : undefined,
+      tempoServico: newTempoServico.trim() || undefined,
+      numSeguroSocial: newIsEfetivo ? (newNumSeguroSocial.trim() || undefined) : undefined,
+      dataNascimento: newDataNascimento.trim() || undefined,
+      habilitacoesLiterarias: newHabilitacoesLiterarias.trim() || undefined,
+      habilitacoesMedio: newHabilitacoesMedio.trim() || undefined,
+      habilitacoesSuperior: newHabilitacoesSuperior.trim() || undefined,
+      periodoTrabalho: newPeriodoTrabalho,
+      genero: newGenero,
+      unidadeOrganica: newUnidadeOrganica.trim() || schoolSettings?.schoolName || undefined,
 
       gabinete: ['DIRECTOR_GERAL', 'SUB_DIRECTOR_PEDAGOGICO', 'SUB_DIRECTOR_ADMINISTRATIVO', 'CHEFE_SECRETARIA'].includes(newRole) ? newGabinete.trim() : undefined,
       decretoNomeacao: ['DIRECTOR_GERAL', 'SUB_DIRECTOR_PEDAGOGICO', 'SUB_DIRECTOR_ADMINISTRATIVO', 'CHEFE_SECRETARIA'].includes(newRole) ? newDecretoNomeacao.trim() : undefined,
       tipoCoordenacao: ['COORDENADOR_TURNO', 'COORDENADOR_DISCIPLINA', 'COORDENADOR_PRATICAS_PEDAGOGICAS', 'COORDENADOR'].includes(newRole) ? newTipoCoordenacao : undefined,
       disciplinaCoordenada: newRole === 'COORDENADOR_DISCIPLINA' ? newDisciplinaCoordenada : undefined,
       turnoCoordenado: (newRole === 'COORDENADOR_TURNO' || newRole === 'AUXILIAR_LIMPEZA') ? newTurnoCoordenado : undefined,
-      categoriaPedagogica: newRole === 'PROFESSOR' ? newCategoriaPedagogica.trim() : undefined,
+      categoriaPedagogica: newRole === 'PROFESSOR' ? (newHabilitacoesLiterarias.trim() || undefined) : undefined,
       areaAtribuicao: newRole === 'AUXILIAR_LIMPEZA' ? newAreaAtribuicao.trim() : undefined,
       postoGuarita: newRole === 'SEGURANCA' ? newPostoGuarita.trim() : undefined,
       tipoEscalaVigilante: newRole === 'SEGURANCA' ? newTipoEscalaVigilante.trim() : undefined,
@@ -860,12 +1531,14 @@ export default function RecursosHumanos({
     setSelectedSubjects([]);
     
     // Limpar campos adicionais de RH & Mapa de Efetividade
+    setNewIsEfetivo(true);
     setNewCategoria('');
     setNewTempoServico('');
     setNewDataNascimento('');
     setNewNumSeguroSocial('');
-    setNewHabilitacoesLiterarias('Licenciatura');
-    setNewGenero('M');
+    setNewHabilitacoesLiterarias('');
+    setNewPeriodoTrabalho('');
+    setNewGenero('');
     setNewUnidadeOrganica('');
     setNewNumAgente('');
     setNewGabinete('');
@@ -910,6 +1583,8 @@ export default function RecursosHumanos({
     setEfetividadeHabilitacoes(staff.habilitacoesLiterarias || staff.categoriaPedagogica || 'Licenciatura');
     setEfetividadeGenero(staff.genero === 'F' || staff.genero === 'Feminino' ? 'F' : 'M');
     setEfetividadeEspecialidade(staff.specialty || '');
+    setEfetividadeEspecialidadeMedio(staff.specialtyMedio || staff.habilitacoesMedio || (staff.specialty && !staff.specialtySuperior ? staff.specialty : ''));
+    setEfetividadeEspecialidadeSuperior(staff.specialtySuperior || staff.habilitacoesSuperior || '');
     setEfetividadeUnidadeOrganica(staff.unidadeOrganica || staff.gabinete || staff.areaAtribuicao || staff.postoGuarita || 'Direcção Escolar');
     setEfetividadeNumAgente(staff.numAgente || '');
   };
@@ -926,7 +1601,9 @@ export default function RecursosHumanos({
       numSeguroSocial: efetividadeSeguroSocial.trim() || undefined,
       habilitacoesLiterarias: efetividadeHabilitacoes.trim() || undefined,
       genero: efetividadeGenero,
-      specialty: efetividadeEspecialidade.trim() || efetividadeModalStaff.specialty,
+      specialtyMedio: efetividadeEspecialidadeMedio.trim() || undefined,
+      specialtySuperior: efetividadeEspecialidadeSuperior.trim() || undefined,
+      specialty: efetividadeEspecialidadeSuperior.trim() || efetividadeEspecialidadeMedio.trim() || efetividadeModalStaff.specialty,
       unidadeOrganica: efetividadeUnidadeOrganica.trim() || undefined,
       numAgente: efetividadeNumAgente.trim() || undefined
     };
@@ -935,54 +1612,356 @@ export default function RecursosHumanos({
     setEfetividadeModalStaff(null);
   };
 
-  // Impressão e Exportação do Mapa de Efetividade
+  const formatarRoleRH = (role: string): string => {
+    switch (role) {
+      case 'DIRECTOR_GERAL': return 'Director Geral';
+      case 'SUB_DIRECTOR_PEDAGOGICO': return 'Subdirector Pedagógico';
+      case 'SUB_DIRECTOR_ADMINISTRATIVO': return 'Subdirector Administrativo';
+      case 'CHEFE_SECRETARIA': return 'Chefe de Secretaria';
+      case 'TECNICO_PEDAGOGICO': return 'Técnico Pedagógico';
+      case 'TECNICO_ADMINISTRATIVO': return 'Técnico Administrativo';
+      case 'COORDENADOR_TURNO': return 'Coordenador de Turno';
+      case 'COORDENADOR_DISCIPLINA': return 'Coordenador de Disciplina';
+      case 'COORDENADOR_PRATICAS_PEDAGOGICAS': return 'Coordenador de Práticas Pedagógicas';
+      case 'COORDENADOR': return 'Coordenador';
+      case 'PROFESSOR': return 'Professor';
+      case 'AUXILIAR_LIMPEZA': return 'Auxiliar de Limpeza';
+      case 'SEGURANCA': case 'GUARDA': return 'Segurança / Guarda';
+      default: return role;
+    }
+  };
+
+  // Impressão e Exportação do Mapa de Efetividade em PDF
   const handlePrintMapaEfetividade = () => {
-    window.print();
+    try {
+      window.print();
+    } catch (e) {
+      console.error("Print error:", e);
+    }
   };
 
-  const handleExportCSVMapaEfetividade = () => {
-    const headers = [
-      'Nº', 'ID', 'Nome Completo', 'Cargo / Função', 'Categoria', 'Tempo de Serviço',
-      'Data de Nascimento', 'Nº Seguro Social', 'Habilitações Literárias', 'Género',
-      'Especialidade', 'Unidade Orgânica', 'Nº de Agente', 'Contacto'
-    ];
+  // Exportação em Ficheiro PDF do Mapa de Efetividade
+  const exportMapaEfetividadePDF = () => {
+    try {
+      const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+      const nomeEscola = schoolSettings?.schoolName || 'COMPLEXO ESCOLAR Nº 1709 LNO LUÍS WATCHIMONA17';
+      const provincia = schoolSettings?.province || 'Lunda Norte';
+      const municipio = schoolSettings?.municipality || 'Cafunfo';
 
-    const rows = filteredStaffForEfetividade.map((s, idx) => [
-      idx + 1,
-      s.id,
-      `"${s.name.replace(/"/g, '""')}"`,
-      `"${(ROLE_LABELS[s.role] || s.role).replace(/"/g, '""')}"`,
-      `"${(s.categoria || s.categoriaPedagogica || '—').replace(/"/g, '""')}"`,
-      `"${(s.tempoServico || '—').replace(/"/g, '""')}"`,
-      `"${(s.dataNascimento || '—').replace(/"/g, '""')}"`,
-      `"${(s.numSeguroSocial || '—').replace(/"/g, '""')}"`,
-      `"${(s.habilitacoesLiterarias || s.categoriaPedagogica || '—').replace(/"/g, '""')}"`,
-      s.genero === 'F' || s.genero === 'Feminino' ? 'F' : 'M',
-      `"${(s.specialty || '—').replace(/"/g, '""')}"`,
-      `"${(s.unidadeOrganica || s.gabinete || s.areaAtribuicao || '—').replace(/"/g, '""')}"`,
-      `"${(s.numAgente || '—').replace(/"/g, '""')}"`,
-      `"${(s.contact || '—').replace(/"/g, '""')}"`
-    ]);
+      const logoUrl = schoolSettings?.logoType === 'PUBLIC'
+        ? schoolSettings?.publicLogoUrl
+        : (schoolSettings?.privateLogoUrl || schoolSettings?.publicLogoUrl);
 
-    const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
-    const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.setAttribute('download', `Mapa_de_Efetividade_${efetividadeMes}_${efetividadeAno.replace('/', '-')}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+      let emblemAdded = false;
+      let currentHeaderY = 10;
+      const centerX = 148.5;
+
+      if (logoUrl && (logoUrl.startsWith('data:') || logoUrl.startsWith('http'))) {
+        try {
+          let format = 'PNG';
+          if (logoUrl.includes('image/jpeg') || logoUrl.includes('image/jpg')) format = 'JPEG';
+          else if (logoUrl.includes('image/gif')) format = 'GIF';
+          doc.addImage(logoUrl, format, centerX - 7.5, currentHeaderY, 15, 15);
+          emblemAdded = true;
+          currentHeaderY += 18;
+        } catch (err) {
+          console.error("Erro ao adicionar logotipo ao PDF do Mapa de Efetividade:", err);
+        }
+      }
+
+      if (!emblemAdded) {
+        doc.setDrawColor(217, 119, 6);
+        doc.setFillColor(254, 243, 199);
+        doc.circle(centerX, currentHeaderY + 6, 6, 'FD');
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(6.5);
+        doc.setTextColor(180, 83, 9);
+        doc.text("SIGEP", centerX, currentHeaderY + 7.5, { align: 'center' });
+        currentHeaderY += 15;
+      }
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9.5);
+      doc.setTextColor(30, 30, 30);
+
+      if (schoolSettings?.headerLine1Active !== false) {
+        doc.text((schoolSettings?.headerLine1 || 'REPÚBLICA DE ANGOLA').toUpperCase(), centerX, currentHeaderY, { align: 'center' });
+        currentHeaderY += 4.5;
+      }
+      if (schoolSettings?.headerLine2Active !== false) {
+        doc.setFontSize(8.5);
+        doc.text((schoolSettings?.headerLine2 || 'MINISTÉRIO DA EDUCAÇÃO').toUpperCase(), centerX, currentHeaderY, { align: 'center' });
+        currentHeaderY += 4.5;
+      }
+      if (schoolSettings?.headerLine3Active !== false) {
+        doc.setFontSize(8.5);
+        doc.text((schoolSettings?.headerLine3 || `GOVERNO PROVINCIAL DE ${provincia.toUpperCase()}`).toUpperCase(), centerX, currentHeaderY, { align: 'center' });
+        currentHeaderY += 4.5;
+      }
+      if (schoolSettings?.headerLine4Active !== false) {
+        doc.setFontSize(8);
+        doc.text((schoolSettings?.headerLine4 || `DIRECÇÃO MUNICIPAL DA EDUCAÇÃO DE ${municipio.toUpperCase()}`).toUpperCase(), centerX, currentHeaderY, { align: 'center' });
+        currentHeaderY += 4.5;
+      }
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10.5);
+      doc.setTextColor(20, 20, 20);
+      doc.text(nomeEscola.toUpperCase(), centerX, currentHeaderY + 0.5, { align: 'center' });
+      currentHeaderY += 7;
+
+      doc.setFontSize(12);
+      doc.setTextColor(20, 30, 70);
+      doc.text(`MAPA DE EFETIVIDADE DA INSTITUIÇÃO — MÊS DE ${efetividadeMes.toUpperCase()} (${efetividadeAno})`, centerX, currentHeaderY + 2, { align: 'center' });
+      currentHeaderY += 7;
+
+      doc.setFontSize(9);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(60, 60, 60);
+      doc.text(`Filtro: ${efetividadeFiltroCargo}  |  Total de Colaboradores Efetivos: ${filteredStaffForEfetividade.length}`, centerX, currentHeaderY, { align: 'center' });
+      currentHeaderY += 6;
+
+      const tableHead = [['Nº', 'Nº Agente', 'Nome Completo do Colaborador', 'Cargo / Função', 'Categoria', 'Habilitações', 'Vínculo', 'Turno', 'Estado']];
+      const tableRows = filteredStaffForEfetividade.map((st, idx) => [
+        idx + 1,
+        st.numAgente || (st as any).num_agente || (st as any).numeroAgente || (st as any).agenteNo || st.id || '—',
+        st.name,
+        st.role ? formatarRoleRH(st.role) : '—',
+        st.categoria || 'Técnico',
+        st.habilitacoesLiterarias || 'Ensino Médio',
+        st.isEfetivo !== false ? 'Efetivo' : 'Contratado',
+        st.periodo || 'Matinal',
+        'Ativo / Efetivo'
+      ]);
+
+      autoTable(doc, {
+        startY: currentHeaderY,
+        head: tableHead,
+        body: tableRows,
+        styles: { fontSize: 8, cellPadding: 2, halign: 'center' },
+        headStyles: { fillColor: [30, 41, 59], textColor: [255, 255, 255], fontStyle: 'bold' },
+        alternateRowStyles: { fillColor: [248, 250, 252] },
+        columnStyles: {
+          2: { halign: 'left', fontStyle: 'bold' },
+          3: { halign: 'left' }
+        }
+      });
+
+      const finalY = (doc as any).lastAutoTable?.finalY || 160;
+      const currentY = Math.min(finalY + 15, 180);
+
+      doc.setFontSize(9);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(0, 0, 0);
+      doc.text('O SUBDIRECTOR ADMINISTRATIVO', 148.5, currentY, { align: 'center' });
+
+      doc.setFont('helvetica', 'normal');
+      doc.line(108.5, currentY + 12, 188.5, currentY + 12);
+
+      const subdirectorNome = staffList.find(s => s.role === 'SUB_DIRECTOR_ADMINISTRATIVO')?.name || 'Nome do Subdirector Administrativo';
+
+      doc.text(`(${subdirectorNome})`, 148.5, currentY + 17, { align: 'center' });
+
+      doc.save(`Mapa_de_Efetividade_${efetividadeMes}_${efetividadeAno.replace('/', '-')}.pdf`);
+    } catch (err) {
+      console.error('Erro ao exportar PDF do Mapa de Efetividade:', err);
+      window.print();
+    }
   };
 
-  // Filtragem Específica para o Mapa de Efetividade
+  // Impressão e Exportação do Relatório de Assiduidade e Faltas em PDF
+  const handlePrintRelatorioFaltas = () => {
+    try {
+      window.print();
+    } catch (e) {
+      console.error("Print error:", e);
+    }
+  };
+
+  // Exportação em Ficheiro PDF do Relatório Oficial de Assiduidade e Faltas
+  const exportRelatorioFaltasPDF = () => {
+    try {
+      const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+      const nomeEscola = schoolSettings?.schoolName || 'COMPLEXO ESCOLAR Nº 1709 LNO LUÍS WATCHIMONA17';
+      const provincia = schoolSettings?.province || 'Lunda Norte';
+      const municipality = schoolSettings?.municipality || 'Cafunfo';
+
+      const logoUrl = schoolSettings?.logoType === 'PUBLIC'
+        ? schoolSettings?.publicLogoUrl
+        : (schoolSettings?.privateLogoUrl || schoolSettings?.publicLogoUrl);
+
+      let emblemAdded = false;
+      let currentHeaderY = 10;
+      const centerX = 105;
+
+      if (logoUrl && (logoUrl.startsWith('data:') || logoUrl.startsWith('http'))) {
+        try {
+          let format = 'PNG';
+          if (logoUrl.includes('image/jpeg') || logoUrl.includes('image/jpg')) format = 'JPEG';
+          else if (logoUrl.includes('image/gif')) format = 'GIF';
+          doc.addImage(logoUrl, format, centerX - 7.5, currentHeaderY, 15, 15);
+          emblemAdded = true;
+          currentHeaderY += 18;
+        } catch (err) {
+          console.error("Erro ao adicionar logotipo ao PDF do Relatório de Faltas:", err);
+        }
+      }
+
+      if (!emblemAdded) {
+        doc.setDrawColor(217, 119, 6);
+        doc.setFillColor(254, 243, 199);
+        doc.circle(centerX, currentHeaderY + 6, 6, 'FD');
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(6.5);
+        doc.setTextColor(180, 83, 9);
+        doc.text("SIGEP", centerX, currentHeaderY + 7.5, { align: 'center' });
+        currentHeaderY += 15;
+      }
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9.5);
+      doc.setTextColor(30, 30, 30);
+
+      if (schoolSettings?.headerLine1Active !== false) {
+        doc.text((schoolSettings?.headerLine1 || 'REPÚBLICA DE ANGOLA').toUpperCase(), centerX, currentHeaderY, { align: 'center' });
+        currentHeaderY += 4.5;
+      }
+      if (schoolSettings?.headerLine2Active !== false) {
+        doc.setFontSize(8.5);
+        doc.text((schoolSettings?.headerLine2 || 'MINISTÉRIO DA EDUCAÇÃO').toUpperCase(), centerX, currentHeaderY, { align: 'center' });
+        currentHeaderY += 4.5;
+      }
+      if (schoolSettings?.headerLine3Active !== false) {
+        doc.setFontSize(8.5);
+        doc.text((schoolSettings?.headerLine3 || `GOVERNO PROVINCIAL DE ${provincia.toUpperCase()}`).toUpperCase(), centerX, currentHeaderY, { align: 'center' });
+        currentHeaderY += 4.5;
+      }
+      if (schoolSettings?.headerLine4Active !== false) {
+        doc.setFontSize(8);
+        doc.text((schoolSettings?.headerLine4 || `DIRECÇÃO MUNICIPAL DA EDUCAÇÃO DE ${municipality.toUpperCase()}`).toUpperCase(), centerX, currentHeaderY, { align: 'center' });
+        currentHeaderY += 4.5;
+      }
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10.5);
+      doc.setTextColor(20, 20, 20);
+      doc.text(nomeEscola.toUpperCase(), centerX, currentHeaderY + 0.5, { align: 'center' });
+      currentHeaderY += 7;
+
+      doc.setFontSize(11);
+      doc.setTextColor(30, 40, 80);
+      doc.text('RELATÓRIO OFICIAL DE ASSIDUIDADE & FALTAS', centerX, currentHeaderY + 2, { align: 'center' });
+      currentHeaderY += 8;
+
+      const todayStrPdf = new Date().toISOString().split('T')[0];
+      const isPastSelectedDate = pontoSelectedDate < todayStrPdf;
+
+      const tableHead = [['Nº', 'ID / Agente', 'Nome do Colaborador', 'Cargo / Função', 'Vínculo', 'Turno', 'Estado no Dia', 'Intervalo Sem Assinatura', 'Nº Total Faltas']];
+      const tableRows = filteredStaffForAssiduidade.map((st, idx) => {
+        const pRecord = pontoRecords.find(r => r.staffId === st.id && r.date === pontoSelectedDate);
+        const absSummary = getStaffAbsenceSummary(st.id);
+
+        let estadoStr = 'NÃO ASSINADO';
+        if (pRecord?.status === 'PRESENTE') {
+          estadoStr = `PRESENTE (${pRecord.timestamp || ''})`;
+        } else if (pRecord?.status === 'PRESENCA_JUSTIFICADA') {
+          estadoStr = 'PRESENÇA JUSTIFICADA';
+        } else if (pRecord?.status === 'FALTA_INJUSTIFICADA' || pRecord?.status === 'FALTA_INJUSTIFICADA_PENDENTE') {
+          estadoStr = 'FALTA INJUSTIFICADA';
+        } else if (pRecord?.statusWorkflow === 'AGUARDANDO_ESCLARECIMENTO' || pRecord?.statusWorkflow === 'JUSTIFICATIVA_ENVIADA') {
+          estadoStr = 'EM ESCLARECIMENTO';
+        } else if (isPastSelectedDate) {
+          estadoStr = 'FALTA INJUSTIFICADA (Auto >24h)';
+        }
+
+        const isEf = st.isEfetivo === true || (st.isEfetivo === undefined && Boolean(st.numAgente && st.numAgente.trim()));
+        const vinculoStr = isEf ? 'Efetivo' : 'Contratado / Não Efetivo';
+
+        return [
+          idx + 1,
+          st.numAgente || (st as any).num_agente || (st as any).numeroAgente || st.id || '—',
+          st.name,
+          st.role ? formatarRoleRH(st.role) : '—',
+          vinculoStr,
+          st.periodoTrabalho || st.periodo || 'MATINAL',
+          estadoStr,
+          absSummary.intervaloStr,
+          `${absSummary.totalFaltas} Faltas`
+        ];
+      });
+
+      autoTable(doc, {
+        startY: currentHeaderY,
+        head: tableHead,
+        body: tableRows,
+        styles: { fontSize: 8, cellPadding: 2, halign: 'center' },
+        headStyles: { fillColor: [40, 50, 90], textColor: [255, 255, 255], fontStyle: 'bold' },
+        alternateRowStyles: { fillColor: [245, 247, 250] },
+        columnStyles: {
+          2: { halign: 'left', fontStyle: 'bold' },
+          3: { halign: 'left' }
+        }
+      });
+
+      const finalY = (doc as any).lastAutoTable?.finalY || 200;
+      const currentY = Math.min(finalY + 20, 250);
+
+      const subdirectorNome = staffList.find(s => s.role === 'SUB_DIRECTOR_ADMINISTRATIVO')?.name || 'Nome do Subdirector Administrativo';
+
+      doc.setFontSize(9);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(0, 0, 0);
+      doc.text('O SUBDIRECTOR ADMINISTRATIVO', 105, currentY, { align: 'center' });
+
+      doc.line(65, currentY + 12, 145, currentY + 12);
+
+      doc.setFont('helvetica', 'normal');
+      doc.text(`(${subdirectorNome})`, 105, currentY + 17, { align: 'center' });
+
+      // Rodapé Inferior
+      const pageHeight = doc.internal.pageSize.getHeight() || 297;
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(100, 100, 100);
+      doc.text(`Data de Referência: ${pontoSelectedDate} | Emitido por: SIGEP RH System`, centerX, pageHeight - 10, { align: 'center' });
+
+      doc.save(`Relatorio_Assiduidade_e_Faltas_${pontoSelectedDate}.pdf`);
+    } catch (err) {
+      console.error('Erro ao gerar PDF de faltas:', err);
+      window.print();
+    }
+  };
+
+  // Ranking de Hierarquia no Mapa de Efetividade:
+  // Director Geral, Pedagógico, Administrativo, Chefe de Secretaria, Técnico Pedagógico, Técnico Administrativo, Coordenador, Professor e Auxiliar de Limpeza.
+  // Segurança é uma empresa à parte e não faz parte deste mapa.
+  const HIERARCHY_MAPA_ORDER: Record<string, number> = {
+    'DIRECTOR_GERAL': 1,
+    'SUB_DIRECTOR_PEDAGOGICO': 2,
+    'SUB_DIRECTOR_ADMINISTRATIVO': 3,
+    'CHEFE_SECRETARIA': 4,
+    'TECNICO_PEDAGOGICO': 5,
+    'TECNICO_ADMINISTRATIVO': 6,
+    'COORDENADOR_TURNO': 7,
+    'COORDENADOR_DISCIPLINA': 7,
+    'COORDENADOR_PRATICAS_PEDAGOGICAS': 7,
+    'COORDENADOR': 7,
+    'PROFESSOR': 8,
+    'AUXILIAR_LIMPEZA': 9
+  };
+
+  // Filtragem Específica para o Mapa de Efetividade com Ordenação por Hierarquia
   const getFilteredStaffForEfetividade = () => {
-    return staffList.filter(s => {
+    const list = staffList.filter(s => {
       if (s.id === 'SIGEP' || s.id === 'ADMIN_SIGEP' || s.role === 'SIGEP' || s.is_root) {
         return false;
       }
-      // O MAPA DE EFETIVIDADE INCLUI TODOS OS FUNCIONÁRIOS EFETIVOS (isEfetivo !== false OU COM Nº DE AGENTE)
-      const isEfetivoStaff = s.isEfetivo !== false || Boolean(s.numAgente && s.numAgente.trim());
+      // O segurança não faz parte deste mapa porque é uma empresa a parte
+      if ((s.role as string) === 'SEGURANCA' || (s.role as string) === 'GUARDA') {
+        return false;
+      }
+      // O MAPA DE EFETIVIDADE INCLUI APENAS FUNCIONÁRIOS EFETIVOS (isEfetivo === true OU se indefinido com nº de agente)
+      const isEfetivoStaff = s.isEfetivo === true || (s.isEfetivo === undefined && Boolean(s.numAgente && s.numAgente.trim()));
       if (!isEfetivoStaff) {
         return false;
       }
@@ -992,17 +1971,94 @@ export default function RecursosHumanos({
       if (efetividadeFiltroCargo === 'LIMPEZA') {
         return s.role === 'AUXILIAR_LIMPEZA';
       }
-      if (efetividadeFiltroCargo === 'SEGURANCA') {
-        return s.role === 'SEGURANCA';
-      }
       if (efetividadeFiltroCargo === 'CHEFIA') {
         return ['DIRECTOR_GERAL', 'SUB_DIRECTOR_PEDAGOGICO', 'SUB_DIRECTOR_ADMINISTRATIVO', 'CHEFE_SECRETARIA', 'TECNICO_PEDAGOGICO', 'TECNICO_ADMINISTRATIVO'].includes(s.role);
       }
       return true;
     });
+
+    return list.sort((a, b) => {
+      const rankA = HIERARCHY_MAPA_ORDER[a.role] ?? 99;
+      const rankB = HIERARCHY_MAPA_ORDER[b.role] ?? 99;
+      if (rankA !== rankB) {
+        return rankA - rankB;
+      }
+      return a.name.localeCompare(b.name, 'pt');
+    });
   };
 
   const filteredStaffForEfetividade = getFilteredStaffForEfetividade();
+
+  // Filtragem Geral para o Relatório Oficial de Assiduidade e Ponto Digital (Inclui TODOS os Funcionários: Efetivos, Contratados, Apoio, Docentes)
+  const getFilteredStaffForAssiduidade = () => {
+    const list = staffList.filter(s => {
+      // Ocultar Administrador do Sistema SIGEP (Root)
+      if (s.id === 'SIGEP' || s.id === 'ADMIN_SIGEP' || s.role === 'SIGEP' || s.is_root) {
+        return false;
+      }
+      if (pontoFiltroTurno !== 'TODOS') {
+        const turno = s.periodoTrabalho || s.periodo || 'MATINAL';
+        if (turno !== pontoFiltroTurno) return false;
+      }
+      return true;
+    });
+
+    return list.sort((a, b) => {
+      const rankA = HIERARCHY_MAPA_ORDER[a.role] ?? 99;
+      const rankB = HIERARCHY_MAPA_ORDER[b.role] ?? 99;
+      if (rankA !== rankB) {
+        return rankA - rankB;
+      }
+      return a.name.localeCompare(b.name, 'pt');
+    });
+  };
+
+  const filteredStaffForAssiduidade = getFilteredStaffForAssiduidade();
+
+  // Resumo do Histórico de Faltas e Intervalo de Ausência sem Assinatura (>24h)
+  const getStaffAbsenceSummary = (staffId: string) => {
+    const todayStr = new Date().toISOString().split('T')[0];
+    const staffRecords = pontoRecords.filter(r => r.staffId === staffId);
+
+    // Conjunto de datas de faltas (Explícitas ou Convertidas por falta de assinatura >24h)
+    const faltaDatesSet = new Set<string>();
+
+    // 1. Faltas Explícitas
+    staffRecords.forEach(r => {
+      if (r.status === 'FALTA_INJUSTIFICADA' || r.status === 'FALTA_INJUSTIFICADA_PENDENTE') {
+        faltaDatesSet.add(r.date);
+      }
+    });
+
+    // 2. Datas passadas (>24h) sem qualquer registo (Não Assinado -> Falta Automática)
+    const allKnownDates = Array.from(new Set(pontoRecords.map(r => r.date)));
+    allKnownDates.forEach(d => {
+      if (d < todayStr) {
+        const rec = staffRecords.find(r => r.date === d);
+        if (!rec) {
+          faltaDatesSet.add(d);
+        }
+      }
+    });
+
+    const sortedFaltaDates = Array.from(faltaDatesSet).sort();
+    const totalFaltas = sortedFaltaDates.length;
+
+    let intervaloStr = 'Sem Faltas';
+    if (totalFaltas === 1) {
+      intervaloStr = `Em ${sortedFaltaDates[0]}`;
+    } else if (totalFaltas > 1) {
+      intervaloStr = `De ${sortedFaltaDates[0]} a ${sortedFaltaDates[totalFaltas - 1]}`;
+    }
+
+    return {
+      totalFaltas,
+      faltaDates: sortedFaltaDates,
+      intervaloStr,
+      primeiraFalta: sortedFaltaDates[0] || '—',
+      ultimaFalta: sortedFaltaDates[totalFaltas - 1] || '—'
+    };
+  };
 
   // Filtragem e categorização fina da listagem com base na Aba de RH selecionada
   const getFilteredStaff = () => {
@@ -1014,9 +2070,11 @@ export default function RecursosHumanos({
 
       // 1. Filtro de Vínculo (Efetivo vs Não Efetivo)
       if (filtroVinculo === 'EFETIVO') {
-        if (!s.numAgente || !s.numAgente.trim()) return false;
+        const isEf = s.isEfetivo === true || (s.isEfetivo === undefined && Boolean(s.numAgente && s.numAgente.trim()));
+        if (!isEf) return false;
       } else if (filtroVinculo === 'NAO_EFETIVO') {
-        if (s.numAgente && s.numAgente.trim()) return false;
+        const isEf = s.isEfetivo === true || (s.isEfetivo === undefined && Boolean(s.numAgente && s.numAgente.trim()));
+        if (isEf) return false;
       }
 
       // 2. Filtro de pesquisa rápida
@@ -1051,6 +2109,38 @@ export default function RecursosHumanos({
 
   return (
     <div className="space-y-6">
+      <style>{`
+        @media print {
+          @page {
+            size: A4 landscape;
+            margin: 6mm;
+          }
+          body * {
+            visibility: hidden !important;
+          }
+          .printable-mapa-area, .printable-mapa-area *,
+          .printable-faltas-area, .printable-faltas-area * {
+            visibility: visible !important;
+          }
+          .printable-mapa-area, .printable-faltas-area {
+            position: absolute !important;
+            left: 0 !important;
+            top: 0 !important;
+            width: 100% !important;
+            margin: 0 !important;
+            padding: 8px !important;
+            box-shadow: none !important;
+            border: none !important;
+            background: white !important;
+            color: black !important;
+            display: block !important;
+          }
+          .no-print, .no-print-backdrop {
+            display: none !important;
+            visibility: hidden !important;
+          }
+        }
+      `}</style>
       {!canEdit && (
         <div className="bg-amber-50 border-l-4 border-amber-500 p-4 rounded-xl flex items-center gap-3 shadow-xs">
           <Lock className="w-5 h-5 text-amber-600 shrink-0" />
@@ -1105,6 +2195,19 @@ export default function RecursosHumanos({
               >
                 <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
                 <span>Mapa de Efetividade</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => { setRhViewMode('PONTO_DIGITAL'); }}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
+                  rhViewMode === 'PONTO_DIGITAL'
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                }`}
+              >
+                <Clock className="w-3.5 h-3.5 text-rose-400" />
+                <span>Ponto Digital & Assiduidade</span>
               </button>
 
               <button
@@ -1173,7 +2276,7 @@ export default function RecursosHumanos({
                     Mapa de Efetividade
                   </h3>
                   <p className="text-xs text-slate-500 font-medium leading-relaxed mt-1">
-                    Emissão do relatório mensal de efetividade da escola com cabeçalho oficial dinâmico das Configurações da Escola, privilégio de Impressão A4/A3 e Exportação PDF/CSV.
+                    Emissão do relatório mensal de efetividade da escola com cabeçalho oficial dinâmico das Configurações da Escola, privilégio de Impressão A4/A3 e Exportação PDF.
                   </p>
                 </div>
               </div>
@@ -1312,7 +2415,599 @@ export default function RecursosHumanos({
               </div>
             </div>
 
+            {/* CARD 6: PONTO DIGITAL & ASSIDUIDADE */}
+            <div 
+              onClick={() => { setRhViewMode('PONTO_DIGITAL'); }}
+              className="group bg-white hover:bg-rose-50/30 border border-slate-200 hover:border-rose-300 rounded-2xl p-5 shadow-xs hover:shadow-md transition-all cursor-pointer flex flex-col justify-between space-y-4 relative overflow-hidden"
+            >
+              <div className="absolute top-0 right-0 w-24 h-24 bg-rose-500/5 rounded-bl-full pointer-events-none group-hover:bg-rose-500/10 transition-colors" />
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="p-3 bg-rose-50 border border-rose-200 text-rose-600 rounded-xl group-hover:scale-105 transition-transform">
+                    <Clock className="w-6 h-6" />
+                  </div>
+                  <span className="text-[10px] font-black font-mono bg-rose-100 text-rose-800 px-2.5 py-1 rounded-full uppercase tracking-wide">
+                    Controlo Ativo
+                  </span>
+                </div>
+
+                <div>
+                  <h3 className="text-sm font-black text-slate-900 uppercase tracking-tight group-hover:text-rose-700 transition-colors">
+                    Ponto Digital & Assiduidade
+                  </h3>
+                  <p className="text-xs text-slate-500 font-medium leading-relaxed mt-1">
+                    Registo diário de presença dos funcionários por turno, workflow de justificativas de faltas, pedidos de esclarecimento e alertas acumulados (5 e 10 faltas).
+                  </p>
+                </div>
+              </div>
+
+              <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-xs font-bold text-rose-700">
+                <span>{pontoRecords.filter(r => r.date === pontoSelectedDate && r.status === 'PRESENTE').length} Presentes Hoje</span>
+                <span className="group-hover:translate-x-1 transition-transform">Abrir Ponto Digital →</span>
+              </div>
+            </div>
+
           </div>
+        </div>
+      )}
+
+      {/* VISTA: PONTO DIGITAL & ASSIDUIDADE */}
+      {rhViewMode === 'PONTO_DIGITAL' && !isAdding && (
+        <div className="space-y-6">
+          {/* Banner do Utilizador Atual (Se estiver logado, permite assinar presença imediatamente) */}
+          {loggedInStaff && (
+            <div className="bg-gradient-to-r from-rose-900 via-slate-900 to-indigo-950 border border-rose-800/50 rounded-2xl p-5 text-white shadow-lg flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="flex items-center gap-3.5">
+                <div className="p-3 bg-white/10 border border-white/20 rounded-2xl text-rose-300">
+                  <Clock className="w-7 h-7 animate-pulse" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-black uppercase bg-rose-500/30 text-rose-200 px-2 py-0.5 rounded-md border border-rose-400/30">
+                      Ponto Digital do Colaborador
+                    </span>
+                    <span className="text-[10px] text-slate-300 font-mono">
+                      {pontoSelectedDate}
+                    </span>
+                  </div>
+                  <h2 className="text-base font-black text-white uppercase tracking-tight mt-0.5">
+                    {loggedInStaff.name} ({ROLE_LABELS[loggedInStaff.role as StaffRole] || loggedInStaff.role})
+                  </h2>
+                  <p className="text-xs text-slate-300 font-medium mt-0.5">
+                    Turno Atribuído: <strong className="text-rose-200">{loggedInStaff.periodoTrabalho || 'MATINAL'}</strong>
+                  </p>
+                </div>
+              </div>
+
+              <div>
+                {(() => {
+                  const todayRec = pontoRecords.find(r => r.staffId === loggedInStaff.id && r.date === pontoSelectedDate);
+                  if (todayRec?.status === 'PRESENTE') {
+                    return (
+                      <div className="bg-emerald-500/20 border border-emerald-400/40 text-emerald-200 px-4 py-2.5 rounded-xl flex items-center gap-2 font-bold text-xs">
+                        <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                        <span>Presença Assinada às {todayRec.timestamp}</span>
+                      </div>
+                    );
+                  }
+                  return (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const today = pontoSelectedDate;
+                        const newRec: PontoRecord = {
+                          id: `PONTO_${loggedInStaff.id}_${today}`,
+                          staffId: loggedInStaff.id,
+                          staffName: loggedInStaff.name,
+                          staffRole: loggedInStaff.role,
+                          date: today,
+                          timestamp: new Date().toLocaleTimeString('pt-PT'),
+                          status: 'PRESENTE',
+                          periodoTrabalho: loggedInStaff.periodoTrabalho || 'MATINAL',
+                          statusWorkflow: 'CONFIRMADO'
+                        };
+                        const updated = [...pontoRecords.filter(r => !(r.staffId === loggedInStaff.id && r.date === today)), newRec];
+                        savePontoRecordsState(updated);
+                        window.alert(`Presença de ${loggedInStaff.name} confirmada com sucesso para ${today}!`);
+                      }}
+                      className="w-full md:w-auto px-6 py-3 bg-rose-600 hover:bg-rose-500 text-white font-black text-xs rounded-xl shadow-md transition-all cursor-pointer flex items-center justify-center gap-2 group border border-rose-400/30"
+                    >
+                      <CheckCircle2 className="w-5 h-5 text-white group-hover:scale-110 transition-transform" />
+                      <span>Assinar Minha Presença de Hoje</span>
+                    </button>
+                  );
+                })()}
+              </div>
+            </div>
+          )}
+
+          {/* Alertas de Esclarecimento Solicitado para o Professor / Colaborador Logado */}
+          {loggedInStaff && (() => {
+            const pendingEsclar = pontoRecords.filter(r => r.staffId === loggedInStaff.id && r.statusWorkflow === 'AGUARDANDO_ESCLARECIMENTO');
+            if (pendingEsclar.length === 0) return null;
+            return (
+              <div className="space-y-3">
+                {pendingEsclar.map(rec => (
+                  <div key={rec.id} className="bg-amber-50 border-2 border-amber-400 p-4 rounded-2xl shadow-md flex flex-col md:flex-row md:items-center justify-between gap-3">
+                    <div className="flex items-start gap-3">
+                      <AlertTriangle className="w-6 h-6 text-amber-600 shrink-0 mt-0.5" />
+                      <div>
+                        <h3 className="text-xs font-black text-amber-900 uppercase">
+                          Pedido de Esclarecimento de Ausência — Data: {rec.date}
+                        </h3>
+                        <p className="text-xs text-amber-800 font-semibold mt-1">
+                          Solicitação da Direção: <span className="italic font-bold">"{rec.motivoEsclarecimentoSolicitado || 'Favor justificar o motivo da ausência.'}"</span>
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPontoJustificativaModalRecord(rec);
+                        setPontoJustificativaTexto('');
+                      }}
+                      className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-black text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
+                    >
+                      <span>Enviar Justificativa</span>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
+
+          {/* Painel de Gestão Direcionada (Para Direção / Subdiretores / RH / Coordenadores) */}
+          <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-5 no-print">
+            {/* Banner Oficial de Responsabilidades por Perfil */}
+            <div className="bg-indigo-900 text-white p-4 rounded-2xl border border-indigo-800 shadow-sm flex items-start gap-3">
+              <Info className="w-5 h-5 text-indigo-300 shrink-0 mt-0.5" />
+              <div className="text-xs space-y-1">
+                <h4 className="font-extrabold uppercase tracking-wide text-indigo-200">
+                  Regras Oficiais de Atribuição e Marcação de Faltas
+                </h4>
+                {loggedInStaff?.role === 'COORDENADOR_TURNO' || loggedInStaff?.role === 'COORDENADOR' ? (
+                  <p className="text-slate-200">
+                    Como <strong>Coordenador do Turno ({loggedInStaff.turnoCoordenado || loggedInStaff.periodoTrabalho || 'Matinal'})</strong>, a sua responsabilidade direta é marcar faltas aos <strong>Professores</strong> do seu turno de trabalho. Os relatórios são enviados ao Subdirector Administrativo.
+                  </p>
+                ) : loggedInStaff?.role === 'DIRECTOR_GERAL' ? (
+                  <p className="text-slate-200">
+                    Como <strong>Director Geral</strong>, a sua responsabilidade direta é marcar falta aos seus colaboradores diretos: <strong>Subdirectores, Técnicos Administrativos, Chefe de Secretaria e Coordenadores</strong>.
+                  </p>
+                ) : loggedInStaff?.role === 'SUB_DIRECTOR_ADMINISTRATIVO' ? (
+                  <p className="text-slate-200">
+                    Como <strong>Subdirector Administrativo (RH)</strong>, exerce a responsabilidade integral pelo <strong>Mapa de Efetividade</strong> e consolidação global dos relatórios de assiduidade enviados pelos Coordenadores.
+                  </p>
+                ) : (
+                  <p className="text-slate-200">
+                    A marcação de faltas aos professores é efetuada pelo Coordenador do respetivo turno. O Director Geral marca falta aos seus colaboradores diretos (Subdirectores, Técnicos e Coordenadores) e o Subdirector Administrativo é o responsável do RH e Mapa de Efetividade.
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-rose-50 border border-rose-200 text-rose-600 rounded-xl">
+                  <Clock className="w-6 h-6" />
+                </div>
+                <div>
+                  <h2 className="text-sm font-black text-slate-900 uppercase tracking-tight">
+                    Módulo de Assiduidade & Ponto Digital Ativo
+                  </h2>
+                  <p className="text-xs text-slate-500 font-medium">
+                    Controlo diário de presenças, workflow de faltas, pedidos de esclarecimento e relatórios oficiais.
+                  </p>
+                </div>
+              </div>
+
+              {/* Controlo de Data, Turno e Botão de Relatório */}
+              <div className="flex items-center gap-3 flex-wrap">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Data de Consulta</label>
+                  <input
+                    type="date"
+                    value={pontoSelectedDate}
+                    onChange={(e) => setPontoSelectedDate(e.target.value)}
+                    className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-800"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Filtrar Turno</label>
+                  <select
+                    value={pontoFiltroTurno}
+                    onChange={(e) => setPontoFiltroTurno(e.target.value)}
+                    className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-800 cursor-pointer"
+                  >
+                    <option value="TODOS">Todos os Turnos</option>
+                    <option value="MATINAL">Matinal (07:30 - 12:30)</option>
+                    <option value="VESPERTINO">Vespertino (12:30 - 17:30)</option>
+                    <option value="NOTURNO">Noturno (18:00 - 21:00)</option>
+                    <option value="ADMINISTRATIVO">Administrativo (08:30 - 14:00)</option>
+                  </select>
+                </div>
+
+                <div className="self-end">
+                  <button
+                    type="button"
+                    onClick={() => setShowRelatorioFaltasModal(true)}
+                    className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs rounded-xl shadow-xs transition-all cursor-pointer flex items-center gap-2 shrink-0"
+                  >
+                    <Printer className="w-4 h-4" />
+                    <span>Relatório de Faltas (PDF / Impressão)</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Tabela de Ponto Digital do Dia */}
+            <div className="overflow-x-auto rounded-xl border border-slate-200">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-800 text-white uppercase text-[10px] font-black tracking-wider">
+                  <tr>
+                    <th className="px-4 py-3">Funcionário / Agente</th>
+                    <th className="px-4 py-3">Cargo / Período</th>
+                    <th className="px-4 py-3 text-center">Estado no Dia</th>
+                    <th className="px-4 py-3 text-center">Intervalo sem Assinatura</th>
+                    <th className="px-4 py-3 text-center">Faltas Acumuladas</th>
+                    <th className="px-4 py-3 text-right">Ações de Marcação</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white">
+                  {filteredStaffForAssiduidade
+                    .map(staff => {
+                      const rec = pontoRecords.find(r => r.staffId === staff.id && r.date === pontoSelectedDate);
+                      const absSummary = getStaffAbsenceSummary(staff.id);
+                      const totalFaltasInjust = absSummary.totalFaltas;
+                      const canManageThisStaff = canUserManagePontoFor(staff);
+                      const todayStrOperational = new Date().toISOString().split('T')[0];
+                      const isPastOpDate = pontoSelectedDate < todayStrOperational;
+
+                      return (
+                        <tr key={staff.id} className="hover:bg-slate-50 transition-colors">
+                          <td className="px-4 py-3.5 font-bold text-slate-800">
+                            <div className="font-extrabold text-slate-900">{staff.name}</div>
+                            <div className="text-[10px] font-mono text-slate-500">
+                              ID: {staff.id} {staff.numAgente ? `• Agente: ${staff.numAgente}` : '• Contratado'}
+                            </div>
+                          </td>
+                          <td className="px-4 py-3.5">
+                            <div className="font-bold text-slate-700">{ROLE_LABELS[staff.role as StaffRole] || staff.role}</div>
+                            <div className="text-[10px] font-semibold text-slate-500">{staff.periodoTrabalho || 'MATINAL'}</div>
+                          </td>
+                          <td className="px-4 py-3.5 text-center">
+                            {rec?.status === 'PRESENTE' && (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-300">
+                                <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                <span>PRESENTE ({rec.timestamp})</span>
+                              </span>
+                            )}
+                            {rec?.status === 'PRESENCA_JUSTIFICADA' && (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black bg-sky-100 text-sky-800 border border-sky-300">
+                                <CheckCircle2 className="w-3 h-3 text-sky-600" />
+                                <span>JUSTIFICADA</span>
+                              </span>
+                            )}
+                            {rec?.status === 'FALTA_INJUSTIFICADA' && (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black bg-rose-100 text-rose-800 border border-rose-300">
+                                <XCircle className="w-3 h-3 text-rose-600" />
+                                <span>FALTA INJUSTIFICADA</span>
+                              </span>
+                            )}
+                            {rec?.statusWorkflow === 'AGUARDANDO_ESCLARECIMENTO' && (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black bg-amber-100 text-amber-800 border border-amber-300">
+                                <Clock className="w-3 h-3 text-amber-600" />
+                                <span>AGUARDA ESCLARECIMENTO</span>
+                              </span>
+                            )}
+                            {rec?.statusWorkflow === 'JUSTIFICATIVA_ENVIADA' && (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black bg-purple-100 text-purple-800 border border-purple-300">
+                                <FileText className="w-3 h-3 text-purple-600" />
+                                <span>JUSTIFICATIVA RECEBIDA</span>
+                              </span>
+                            )}
+                            {!rec && (
+                              isPastOpDate ? (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black bg-rose-100 text-rose-900 border border-rose-300">
+                                  <XCircle className="w-3 h-3 text-rose-600" />
+                                  <span>FALTA AUTOMÁTICA (&gt;24h)</span>
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black bg-slate-100 text-slate-600 border border-slate-200">
+                                  <span>NÃO ASSINADO</span>
+                                </span>
+                              )
+                            )}
+                          </td>
+                          <td className="px-4 py-3.5 text-center">
+                            {absSummary.totalFaltas > 0 ? (
+                              <span className="inline-block font-mono text-[10px] font-bold text-amber-900 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded">
+                                {absSummary.intervaloStr}
+                              </span>
+                            ) : (
+                              <span className="text-slate-400 text-[11px] font-normal">Sem Faltas</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3.5 text-center">
+                            {totalFaltasInjust >= 10 ? (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black bg-rose-600 text-white shadow-xs animate-pulse">
+                                <AlertTriangle className="w-3 h-3 text-white" />
+                                <span>{totalFaltasInjust} FALTAS (CRÍTICO - 10+)</span>
+                              </span>
+                            ) : totalFaltasInjust >= 5 ? (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black bg-amber-500 text-white shadow-xs">
+                                <AlertTriangle className="w-3 h-3 text-white" />
+                                <span>{totalFaltasInjust} FALTAS (ALERTA - 5+)</span>
+                              </span>
+                            ) : (
+                              <span className="px-2.5 py-1 rounded-full text-[11px] font-bold text-slate-700 bg-slate-100">
+                                {totalFaltasInjust} Faltas
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3.5 text-right space-x-1.5">
+                            {canEdit && canManageThisStaff ? (
+                              <>
+                                <button
+                                  type="button"
+                                  title="Marcar como Presente"
+                                  onClick={() => {
+                                    const newRec: PontoRecord = {
+                                      id: `PONTO_${staff.id}_${pontoSelectedDate}`,
+                                      staffId: staff.id,
+                                      staffName: staff.name,
+                                      staffRole: staff.role,
+                                      date: pontoSelectedDate,
+                                      timestamp: new Date().toLocaleTimeString('pt-PT'),
+                                      status: 'PRESENTE',
+                                      periodoTrabalho: staff.periodoTrabalho || 'MATINAL',
+                                      statusWorkflow: 'CONFIRMADO'
+                                    };
+                                    savePontoRecordsState([...pontoRecords.filter(r => !(r.staffId === staff.id && r.date === pontoSelectedDate)), newRec]);
+                                  }}
+                                  className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-lg text-[10px] font-black cursor-pointer"
+                                >
+                                  Presente
+                                </button>
+
+                                <button
+                                  type="button"
+                                  title="Confirmar Falta Injustificada"
+                                  onClick={() => {
+                                    const newRec: PontoRecord = {
+                                      id: `PONTO_${staff.id}_${pontoSelectedDate}`,
+                                      staffId: staff.id,
+                                      staffName: staff.name,
+                                      staffRole: staff.role,
+                                      date: pontoSelectedDate,
+                                      status: 'FALTA_INJUSTIFICADA',
+                                      periodoTrabalho: staff.periodoTrabalho || 'MATINAL',
+                                      statusWorkflow: 'CONFIRMADO'
+                                    };
+                                    savePontoRecordsState([...pontoRecords.filter(r => !(r.staffId === staff.id && r.date === pontoSelectedDate)), newRec]);
+                                  }}
+                                  className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 rounded-lg text-[10px] font-black cursor-pointer"
+                                >
+                                  Confirmar Falta
+                                </button>
+
+                                <button
+                                  type="button"
+                                  title="Pedir Esclarecimento"
+                                  onClick={() => {
+                                    const existingRec = rec || {
+                                      id: `PONTO_${staff.id}_${pontoSelectedDate}`,
+                                      staffId: staff.id,
+                                      staffName: staff.name,
+                                      staffRole: staff.role,
+                                      date: pontoSelectedDate,
+                                      status: 'FALTA_INJUSTIFICADA_PENDENTE',
+                                      periodoTrabalho: staff.periodoTrabalho || 'MATINAL'
+                                    };
+                                    setPontoEsclarecimentoModalRecord(existingRec);
+                                    setPontoEsclarecimentoMotivo('');
+                                  }}
+                                  className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-lg text-[10px] font-black cursor-pointer"
+                                >
+                                  Pedir Esclarecimento
+                                </button>
+                              </>
+                            ) : (
+                              <span className="text-[10px] font-bold text-slate-400 italic bg-slate-50 px-2 py-1 rounded-md border border-slate-100">
+                                🔒 Restrito ao perfil responsável
+                              </span>
+                            )}
+
+                            {rec?.statusWorkflow === 'JUSTIFICATIVA_ENVIADA' && canEdit && (
+                              <div className="mt-2 text-left bg-purple-50 border border-purple-200 p-2 rounded-xl space-y-1">
+                                <div className="text-[10px] font-bold text-purple-900">
+                                  Justificativa do Colaborador: "{rec.justificativaProfessor}"
+                                </div>
+                                <div className="flex items-center gap-1.5 pt-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const updatedRec: PontoRecord = {
+                                        ...rec,
+                                        status: 'PRESENCA_JUSTIFICADA',
+                                        statusWorkflow: 'ANULADO_JUSTIFICADO',
+                                        decisaoDiretorObs: 'Justificativa Aceita pela Direção'
+                                      };
+                                      savePontoRecordsState([...pontoRecords.filter(r => r.id !== rec.id), updatedRec]);
+                                      window.alert('Justificativa ACEITA. A falta foi anulada!');
+                                    }}
+                                    className="px-2 py-0.5 bg-emerald-600 text-white rounded text-[10px] font-black cursor-pointer"
+                                  >
+                                    Aceitar
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const updatedRec: PontoRecord = {
+                                        ...rec,
+                                        status: 'FALTA_INJUSTIFICADA',
+                                        statusWorkflow: 'CONFIRMADO',
+                                        decisaoDiretorObs: 'Justificativa Rejeitada pela Direção'
+                                      };
+                                      savePontoRecordsState([...pontoRecords.filter(r => r.id !== rec.id), updatedRec]);
+                                      window.alert('Justificativa REJEITADA. Mantida Falta Injustificada.');
+                                    }}
+                                    className="px-2 py-0.5 bg-rose-600 text-white rounded text-[10px] font-black cursor-pointer"
+                                  >
+                                    Rejeitar
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* MODAL: PEDIR ESCLARECIMENTO (DIREÇÃO) */}
+          {pontoEsclarecimentoModalRecord && (
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+              <div className="bg-white rounded-2xl max-w-md w-full p-5 space-y-4 shadow-xl border border-slate-200">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                  <h3 className="text-sm font-black text-slate-900 uppercase flex items-center gap-2">
+                    <Clock className="w-4 h-4 text-amber-600" />
+                    <span>Pedir Esclarecimento de Falta</span>
+                  </h3>
+                  <button
+                    onClick={() => setPontoEsclarecimentoModalRecord(null)}
+                    className="p-1 hover:bg-slate-100 rounded-lg text-slate-400 font-bold"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                <div>
+                  <p className="text-xs text-slate-600 mb-2">
+                    Colaborador: <strong>{pontoEsclarecimentoModalRecord.staffName}</strong> • Data: <strong>{pontoEsclarecimentoModalRecord.date}</strong>
+                  </p>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Motivo ou Pedido de Esclarecimento da Direção *
+                  </label>
+                  <textarea
+                    required
+                    rows={3}
+                    value={pontoEsclarecimentoMotivo}
+                    onChange={(e) => setPontoEsclarecimentoMotivo(e.target.value)}
+                    placeholder="Ex: Favor apresentar o comprovativo de incapacidade ou justificar a ausência do 1º tempo letivo."
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-800 font-medium focus:bg-white focus:border-amber-500"
+                  />
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setPontoEsclarecimentoModalRecord(null)}
+                    className="px-4 py-2 hover:bg-slate-100 text-slate-600 rounded-xl text-xs font-bold"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!pontoEsclarecimentoMotivo.trim()) {
+                        window.alert('Digite o motivo do pedido de esclarecimento.');
+                        return;
+                      }
+                      const updatedRec: PontoRecord = {
+                        ...pontoEsclarecimentoModalRecord,
+                        status: 'FALTA_INJUSTIFICADA_PENDENTE',
+                        statusWorkflow: 'AGUARDANDO_ESCLARECIMENTO',
+                        motivoEsclarecimentoSolicitado: pontoEsclarecimentoMotivo.trim(),
+                        dataSolicitacaoEsclarecimento: new Date().toISOString()
+                      };
+                      savePontoRecordsState([...pontoRecords.filter(r => r.id !== updatedRec.id), updatedRec]);
+                      setPontoEsclarecimentoModalRecord(null);
+                      window.alert('Pedido de esclarecimento enviado com sucesso!');
+                    }}
+                    className="px-5 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-black shadow-xs"
+                  >
+                    Enviar Pedido
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* MODAL: ENVIAR JUSTIFICATIVA (PROFESSOR / COLABORADOR) */}
+          {pontoJustificativaModalRecord && (
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+              <div className="bg-white rounded-2xl max-w-md w-full p-5 space-y-4 shadow-xl border border-slate-200">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                  <h3 className="text-sm font-black text-slate-900 uppercase flex items-center gap-2">
+                    <FileText className="w-4 h-4 text-indigo-600" />
+                    <span>Enviar Justificativa de Ausência</span>
+                  </h3>
+                  <button
+                    onClick={() => setPontoJustificativaModalRecord(null)}
+                    className="p-1 hover:bg-slate-100 rounded-lg text-slate-400 font-bold"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                <div>
+                  <p className="text-xs text-slate-600 mb-2">
+                    Data da Ausência: <strong>{pontoJustificativaModalRecord.date}</strong>
+                  </p>
+                  <p className="text-xs bg-amber-50 p-2.5 rounded-xl text-amber-900 font-semibold mb-3 border border-amber-200">
+                    Solicitação da Direção: "{pontoJustificativaModalRecord.motivoEsclarecimentoSolicitado}"
+                  </p>
+
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Escreva a sua Justificativa *
+                  </label>
+                  <textarea
+                    required
+                    rows={4}
+                    value={pontoJustificativaTexto}
+                    onChange={(e) => setPontoJustificativaTexto(e.target.value)}
+                    placeholder="Ex: Não pude comparecer por motivos de saúde. Anexo a consulta médica."
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-800 font-medium focus:bg-white focus:border-indigo-500"
+                  />
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setPontoJustificativaModalRecord(null)}
+                    className="px-4 py-2 hover:bg-slate-100 text-slate-600 rounded-xl text-xs font-bold"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!pontoJustificativaTexto.trim()) {
+                        window.alert('Digite a justificativa.');
+                        return;
+                      }
+                      const updatedRec: PontoRecord = {
+                        ...pontoJustificativaModalRecord,
+                        justificativaProfessor: pontoJustificativaTexto.trim(),
+                        dataJustificativa: new Date().toISOString(),
+                        statusWorkflow: 'JUSTIFICATIVA_ENVIADA'
+                      };
+                      savePontoRecordsState([...pontoRecords.filter(r => r.id !== updatedRec.id), updatedRec]);
+                      setPontoJustificativaModalRecord(null);
+                      window.alert('Justificativa enviada à Direção com sucesso!');
+                    }}
+                    className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black shadow-xs"
+                  >
+                    Submeter Justificativa
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1336,24 +3031,23 @@ export default function RecursosHumanos({
                 </div>
               </div>
 
-              {/* Botões de Ação: Imprimir & Exportar */}
+              {/* Botão de Ação: Exportar PDF e Imprimir */}
               <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={exportMapaEfetividadePDF}
+                  className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs rounded-xl shadow-xs transition-all cursor-pointer flex items-center gap-2"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>Exportar em PDF</span>
+                </button>
                 <button
                   type="button"
                   onClick={handlePrintMapaEfetividade}
                   className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs rounded-xl shadow-xs transition-all cursor-pointer flex items-center gap-2"
                 >
                   <Printer className="w-4 h-4" />
-                  <span>Imprimir Mapa (A4/A3)</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleExportCSVMapaEfetividade}
-                  className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs rounded-xl shadow-xs transition-all cursor-pointer flex items-center gap-2"
-                >
-                  <Download className="w-4 h-4" />
-                  <span>Exportar CSV / Excel</span>
+                  <span>Imprimir</span>
                 </button>
               </div>
             </div>
@@ -1414,10 +3108,11 @@ export default function RecursosHumanos({
                 body * {
                   visibility: hidden !important;
                 }
-                .printable-mapa-area, .printable-mapa-area * {
+                .printable-mapa-area, .printable-mapa-area *,
+                .printable-faltas-area, .printable-faltas-area * {
                   visibility: visible !important;
                 }
-                .printable-mapa-area {
+                .printable-mapa-area, .printable-faltas-area {
                   position: absolute !important;
                   left: 0 !important;
                   top: 0 !important;
@@ -1428,8 +3123,9 @@ export default function RecursosHumanos({
                   border: none !important;
                   background: white !important;
                 }
-                .no-print {
+                .no-print, .no-print-backdrop {
                   display: none !important;
+                  visibility: hidden !important;
                 }
                 @page {
                   size: A4 landscape;
@@ -1441,24 +3137,49 @@ export default function RecursosHumanos({
             {/* CABEÇALHO OFICIAL DINÂMICO DE CONFIGURAÇÕES DA ESCOLA */}
             <div className="text-center space-y-1 pb-3 border-b border-slate-300">
               <div className="flex justify-center items-center mb-1">
-                {schoolSettings?.logoType === 'PRIVATE' && schoolSettings?.privateLogoUrl ? (
-                  <img src={schoolSettings.privateLogoUrl} alt="Logótipo" className="h-14 w-auto object-contain" />
-                ) : (
-                  <div className="w-10 h-10 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-600 font-bold text-base mb-0.5">
-                    🇦🇴
-                  </div>
-                )}
+                {(() => {
+                  const logoUrl = schoolSettings?.logoType === 'PUBLIC'
+                    ? (schoolSettings?.publicLogoUrl || '🇦🇴')
+                    : (schoolSettings?.privateLogoUrl || schoolSettings?.publicLogoUrl || '🎓');
+                  
+                  if (logoUrl && (logoUrl.startsWith('data:') || logoUrl.startsWith('http'))) {
+                    return (
+                      <img
+                        src={logoUrl}
+                        alt="Logótipo da Escola"
+                        className="h-14 w-auto object-contain mx-auto mb-0.5"
+                        referrerPolicy="no-referrer"
+                      />
+                    );
+                  }
+                  return (
+                    <div className="w-10 h-10 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-600 font-bold text-base mb-0.5 mx-auto">
+                      {logoUrl || '🇦🇴'}
+                    </div>
+                  );
+                })()}
               </div>
 
-              <p className="text-[11px] font-black tracking-widest text-slate-800 uppercase font-serif">
-                REPÚBLICA DE ANGOLA
-              </p>
-              <p className="text-[10px] font-bold tracking-wider text-slate-700 uppercase font-serif">
-                GOVERNO PROVINCIAL DE {schoolSettings?.province?.toUpperCase() || 'LUANDA'}
-              </p>
-              <p className="text-[10px] font-bold tracking-wider text-slate-700 uppercase font-serif">
-                DIRECÇÃO MUNICIPAL DA EDUCAÇÃO DE {schoolSettings?.municipality?.toUpperCase() || 'CAZENGA'}
-              </p>
+              {schoolSettings?.headerLine1Active !== false && (
+                <p className="text-[11px] font-black tracking-widest text-slate-800 uppercase font-serif">
+                  {schoolSettings?.headerLine1 || 'REPÚBLICA DE ANGOLA'}
+                </p>
+              )}
+              {schoolSettings?.headerLine2Active !== false && (
+                <p className="text-[10px] font-bold tracking-wider text-slate-700 uppercase font-serif">
+                  {schoolSettings?.headerLine2 || 'MINISTÉRIO DA EDUCAÇÃO'}
+                </p>
+              )}
+              {schoolSettings?.headerLine3Active !== false && (
+                <p className="text-[10px] font-bold tracking-wider text-slate-700 uppercase font-serif">
+                  {schoolSettings?.headerLine3 || `GOVERNO PROVINCIAL DE ${(schoolSettings?.province || 'LUANDA').toUpperCase()}`}
+                </p>
+              )}
+              {schoolSettings?.headerLine4Active !== false && (
+                <p className="text-[10px] font-bold tracking-wider text-slate-700 uppercase font-serif">
+                  {schoolSettings?.headerLine4 || `DIRECÇÃO MUNICIPAL DA EDUCAÇÃO DE ${(schoolSettings?.municipality || 'CAZENGA').toUpperCase()}`}
+                </p>
+              )}
               <p className="text-xs font-black tracking-wide text-slate-900 uppercase font-serif pt-1">
                 {schoolSettings?.schoolName || 'INSTITUIÇÃO DE ENSINO PÚBLICO'}
               </p>
@@ -1476,27 +3197,31 @@ export default function RecursosHumanos({
               <table className="w-full text-left border-collapse border border-slate-900 text-[10px] font-serif">
                 <thead>
                   <tr className="bg-slate-100 text-slate-900 font-bold text-center border-b border-slate-900">
-                    <th className="border border-slate-900 px-1.5 py-1.5 w-7">Nº</th>
-                    <th className="border border-slate-900 px-1.5 py-1.5">ID</th>
-                    <th className="border border-slate-900 px-2 py-1.5 text-left">Nome Completo</th>
-                    <th className="border border-slate-900 px-1.5 py-1.5">Cargo / Função</th>
-                    <th className="border border-slate-900 px-1.5 py-1.5">Categoria</th>
-                    <th className="border border-slate-900 px-1.5 py-1.5">Tempo de Serviço</th>
-                    <th className="border border-slate-900 px-1.5 py-1.5">Data de Nascimento</th>
-                    <th className="border border-slate-900 px-1.5 py-1.5">Nº de Seguro Social</th>
-                    <th className="border border-slate-900 px-1.5 py-1.5">Habilitações Literárias</th>
-                    <th className="border border-slate-900 px-1 py-1.5">Género</th>
-                    <th className="border border-slate-900 px-1.5 py-1.5">Especialidade</th>
-                    <th className="border border-slate-900 px-1.5 py-1.5">Unidade Orgânica</th>
-                    <th className="border border-slate-900 px-1.5 py-1.5">Nº de Agente</th>
-                    <th className="border border-slate-900 px-1.5 py-1.5">Contacto</th>
-                    <th className="border border-slate-900 px-1.5 py-1.5 no-print">Ações</th>
+                    <th rowSpan={2} className="border border-slate-900 px-1.5 py-1.5 w-7">Nº</th>
+                    <th rowSpan={2} className="border border-slate-900 px-1.5 py-1.5">ID</th>
+                    <th rowSpan={2} className="border border-slate-900 px-2 py-1.5 text-left">Nome Completo</th>
+                    <th rowSpan={2} className="border border-slate-900 px-1.5 py-1.5">Cargo / Função</th>
+                    <th rowSpan={2} className="border border-slate-900 px-1.5 py-1.5">Categoria</th>
+                    <th rowSpan={2} className="border border-slate-900 px-1.5 py-1.5">Tempo de Serviço</th>
+                    <th rowSpan={2} className="border border-slate-900 px-1.5 py-1.5">Data de Nascimento</th>
+                    <th rowSpan={2} className="border border-slate-900 px-1.5 py-1.5">Nº de Seguro Social</th>
+                    <th rowSpan={2} className="border border-slate-900 px-1.5 py-1.5">Habilitações Literárias</th>
+                    <th rowSpan={2} className="border border-slate-900 px-1 py-1.5">Género</th>
+                    <th colSpan={2} className="border border-slate-900 px-1.5 py-1 text-center font-bold">Especialidade</th>
+                    <th rowSpan={2} className="border border-slate-900 px-1.5 py-1.5">Nº de Agente</th>
+                    <th rowSpan={2} className="border border-slate-900 px-1.5 py-1.5">Contacto</th>
+                    <th rowSpan={2} className="border border-slate-900 px-1.5 py-1.5">Unidade Orgânica</th>
+                    <th rowSpan={2} className="border border-slate-900 px-1.5 py-1.5 no-print">Ações</th>
+                  </tr>
+                  <tr className="bg-slate-100 text-slate-900 font-bold text-center border-b border-slate-900">
+                    <th className="border border-slate-900 px-1.5 py-1 font-bold">Médio</th>
+                    <th className="border border-slate-900 px-1.5 py-1 font-bold">Superior</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredStaffForEfetividade.length === 0 ? (
                     <tr>
-                      <td colSpan={15} className="border border-slate-900 px-4 py-8 text-center text-slate-500 italic">
+                      <td colSpan={16} className="border border-slate-900 px-4 py-8 text-center text-slate-500 italic">
                         Nenhum colaborador encontrado para o filtro selecionado no Mapa de Efetividade.
                       </td>
                     </tr>
@@ -1509,14 +3234,15 @@ export default function RecursosHumanos({
                         <td className="border border-slate-900 px-1.5 py-1.5 text-center font-medium">{ROLE_LABELS[s.role] || s.role}</td>
                         <td className="border border-slate-900 px-1.5 py-1.5 text-center">{s.categoria || s.categoriaPedagogica || '—'}</td>
                         <td className="border border-slate-900 px-1.5 py-1.5 text-center">{s.tempoServico || '—'}</td>
-                        <td className="border border-slate-900 px-1.5 py-1.5 text-center font-mono">{s.dataNascimento || '—'}</td>
+                        <td className="border border-slate-900 px-1.5 py-1.5 text-center font-mono">{formatarDataBR(s.dataNascimento)}</td>
                         <td className="border border-slate-900 px-1.5 py-1.5 text-center font-mono">{s.numSeguroSocial || '—'}</td>
                         <td className="border border-slate-900 px-1.5 py-1.5 text-center">{s.habilitacoesLiterarias || s.categoriaPedagogica || '—'}</td>
                         <td className="border border-slate-900 px-1 py-1.5 text-center font-bold">{s.genero === 'F' || s.genero === 'Feminino' ? 'F' : 'M'}</td>
-                        <td className="border border-slate-900 px-1.5 py-1.5 text-center">{s.specialty || '—'}</td>
-                        <td className="border border-slate-900 px-1.5 py-1.5 text-center">{s.unidadeOrganica || s.gabinete || s.areaAtribuicao || '—'}</td>
-                        <td className="border border-slate-900 px-1.5 py-1.5 text-center font-mono">{s.numAgente || '—'}</td>
+                        <td className="border border-slate-900 px-1.5 py-1.5 text-center">{s.specialtyMedio || s.habilitacoesMedio || (s.specialty && !s.specialtySuperior ? s.specialty : '—')}</td>
+                        <td className="border border-slate-900 px-1.5 py-1.5 text-center">{s.specialtySuperior || s.habilitacoesSuperior || '—'}</td>
+                        <td className="border border-slate-900 px-1.5 py-1.5 text-center font-mono">{s.numAgente || (s as any).num_agente || (s as any).numeroAgente || (s as any).agenteNo || s.id || '—'}</td>
                         <td className="border border-slate-900 px-1.5 py-1.5 text-center font-mono">{s.contact || '—'}</td>
+                        <td className="border border-slate-900 px-1.5 py-1.5 text-center">{s.unidadeOrganica || s.gabinete || s.areaAtribuicao || '—'}</td>
                         <td className="border border-slate-900 px-1.5 py-1.5 text-center no-print">
                           <button
                             type="button"
@@ -1535,11 +3261,11 @@ export default function RecursosHumanos({
 
             {/* RODAPÉ OFICIAL DE ASSINATURA */}
             <div className="pt-10 pb-4 text-center space-y-1">
-              <p className="text-xs font-serif font-bold text-slate-900">O Director</p>
+              <p className="text-xs font-serif font-black text-slate-900 uppercase tracking-wide">O Subdirector Administrativo</p>
               <div className="pt-8">
-                <div className="w-64 mx-auto border-b border-slate-900"></div>
-                <p className="text-xs font-serif italic text-slate-800 pt-1">
-                  ({schoolSettings?.directorName || staffList.find(s => s.role === 'DIRECTOR_GERAL')?.name || 'Nome do Assinante'})
+                <div className="w-72 mx-auto border-b border-slate-900"></div>
+                <p className="text-xs font-serif italic font-bold text-slate-800 pt-1">
+                  ({staffList.find(s => s.role === 'SUB_DIRECTOR_ADMINISTRATIVO')?.name || 'Nome do Subdirector Administrativo'})
                 </p>
               </div>
             </div>
@@ -1783,9 +3509,13 @@ export default function RecursosHumanos({
                   setNewId('');
                   setNewName('');
                   setNewPassword('12345');
+                  setAccumulatedAssignments([]);
                   setSelectedClasses([]);
                   setSelectedSections([]);
                   setSelectedSubjects([]);
+                  setWizardClass('');
+                  setWizardSubject('');
+                  setWizardSection('');
                   setFormError('');
                 }}
                 className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black flex items-center justify-center gap-2 cursor-pointer transition-all shadow-md hover:scale-[1.01] active:scale-95"
@@ -1930,7 +3660,7 @@ export default function RecursosHumanos({
                   <span>Vínculo Institucional & Dados do Mapa de Efetividade (RH)</span>
                 </span>
                 <span className="text-[10px] font-bold text-slate-500">
-                  Apenas funcionários com Nº de Agente figurarão no Mapa de Efetividade
+                  {newIsEfetivo ? 'Funcionários efetivos figuram obrigatoriamente no Mapa de Efetividade' : 'Funcionários não efetivos não constam do Mapa de Efetividade'}
                 </span>
               </div>
 
@@ -1955,6 +3685,7 @@ export default function RecursosHumanos({
                       onClick={() => {
                         setNewIsEfetivo(false);
                         setNewNumAgente('');
+                        setNewNumSeguroSocial('');
                       }}
                       className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl border text-xs font-black cursor-pointer transition-all ${
                         !newIsEfetivo 
@@ -1967,106 +3698,209 @@ export default function RecursosHumanos({
                   </div>
                 </div>
 
+                {/* Unidade Orgânica */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">Unidade Orgânica (Escola) *</label>
+                  <input
+                    type="text"
+                    required
+                    value={newUnidadeOrganica || schoolSettings?.schoolName || ''}
+                    onChange={(e) => setNewUnidadeOrganica(e.target.value)}
+                    placeholder={schoolSettings?.schoolName || "Ex: Escola Secundária Central"}
+                    className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-800 font-semibold focus:outline-hidden focus:border-indigo-500"
+                  />
+                </div>
+
+                {/* Período / Turno de Trabalho */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">Período / Turno de Trabalho *</label>
+                  <select
+                    value={newPeriodoTrabalho}
+                    onChange={(e) => setNewPeriodoTrabalho(e.target.value as any)}
+                    className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-800 font-bold focus:outline-hidden focus:border-indigo-500 cursor-pointer"
+                  >
+                    <option value="">-- Selecione o Turno --</option>
+                    <option value="MATINAL">Matinal / Laboral (07:30 - 12:30)</option>
+                    <option value="VESPERTINO">Vespertino / Tarde (12:30 - 17:30)</option>
+                    <option value="NOTURNO">Noturno / Noite (18:00 - 21:00)</option>
+                    <option value="ADMINISTRATIVO">Administrativo (08:30 - 14:00)</option>
+                  </select>
+                </div>
+
+                {/* Data de Nascimento */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">Data de Nascimento (dd/mm/aaaa) *</label>
+                  <input
+                    type="date"
+                    required
+                    value={newDataNascimento}
+                    onChange={(e) => setNewDataNascimento(e.target.value)}
+                    className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-800 font-semibold focus:outline-hidden focus:border-indigo-500"
+                  />
+                </div>
+
+                {/* Género */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">Género *</label>
+                  <select
+                    value={newGenero}
+                    onChange={(e) => setNewGenero(e.target.value as 'M' | 'F')}
+                    className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-800 font-bold focus:outline-hidden focus:border-indigo-500 cursor-pointer"
+                  >
+                    <option value="">-- Selecione o Género --</option>
+                    <option value="M">Masculino (M)</option>
+                    <option value="F">Feminino (F)</option>
+                  </select>
+                </div>
+
+                {/* CAMPOS SOLICITADOS A TODOS OS MEMBROS NO CADASTRAMENTO PARA O MAPA DE EFETIVIDADE */}
                 {/* Nº de Agente */}
-                {newIsEfetivo ? (
+                {newIsEfetivo && (
                   <div>
                     <label className="block text-xs font-bold text-slate-800 mb-1.5 flex justify-between items-center">
                       <span>Nº de Agente do Estado *</span>
-                      <span className="text-[10px] text-emerald-700 font-black uppercase">Obrigatório</span>
+                      <span className="text-[10px] text-emerald-700 font-black uppercase">Mapa de Efetividade</span>
                     </label>
                     <input
                       type="text"
-                      required
+                      required={newIsEfetivo}
                       value={newNumAgente}
                       onChange={(e) => setNewNumAgente(e.target.value)}
                       placeholder="Ex: 849204"
                       className="w-full bg-emerald-50/30 border border-emerald-300 rounded-xl px-3.5 py-2 text-xs text-slate-900 font-mono font-black focus:outline-hidden focus:border-emerald-500 focus:bg-white"
                     />
                   </div>
-                ) : (
+                )}
+
+                {/* Categoria Profissional (Grau) - Apenas para Efetivos */}
+                {newIsEfetivo && (
                   <div>
-                    <label className="block text-xs font-bold text-slate-400 mb-1.5">Nº de Agente do Estado</label>
-                    <div className="p-2 bg-slate-100 border border-slate-200 rounded-xl text-xs text-slate-400 font-medium italic text-center">
-                      Não aplicável (Não Efetivo)
-                    </div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1.5">Categoria (Grau da Função Pública) *</label>
+                    <input
+                      type="text"
+                      required={newIsEfetivo}
+                      value={newCategoria}
+                      onChange={(e) => setNewCategoria(e.target.value)}
+                      placeholder="Digite a Categoria... (Ex: 6º Grau)"
+                      list="list-categorias"
+                      className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-800 font-semibold focus:outline-hidden focus:border-indigo-500"
+                    />
+                    <datalist id="list-categorias">
+                      <option value="3º Grau" />
+                      <option value="4º Grau" />
+                      <option value="6º Grau" />
+                      <option value="9º Grau" />
+                      <option value="13º Grau" />
+                      <option value="Técnico Superior de 1ª Classe" />
+                      <option value="Técnico Superior de 2ª Classe" />
+                      <option value="Técnico Médio de 1ª Classe" />
+                      <option value="Técnico Médio de 2ª Classe" />
+                      <option value="Prof. do Ensino Primário e Secundário" />
+                      <option value="Auxiliar de Serviços Gerais" />
+                    </datalist>
                   </div>
                 )}
 
-                {/* Categoria Profissional */}
+                {/* Tempo de Serviço - Preenchimento Manual até 65 Anos */}
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1.5">Categoria Profissional</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">Tempo de Serviço (máx. 65 Anos) *</label>
                   <input
                     type="text"
-                    value={newCategoria}
-                    onChange={(e) => setNewCategoria(e.target.value)}
-                    placeholder="Ex: Prof. do Ensino Primário e Secundário"
-                    className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-800 font-medium focus:outline-hidden focus:border-indigo-500"
-                  />
-                </div>
-
-                {/* Tempo de Serviço */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1.5">Tempo de Serviço</label>
-                  <input
-                    type="text"
+                    required
                     value={newTempoServico}
                     onChange={(e) => setNewTempoServico(e.target.value)}
-                    placeholder="Ex: 8 Anos"
-                    className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-800 font-medium focus:outline-hidden focus:border-indigo-500"
+                    placeholder="Digite o tempo... Ex: 12 Anos (até 65 anos)"
+                    list="list-tempo-servico"
+                    className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-800 font-semibold focus:outline-hidden focus:border-indigo-500"
                   />
+                  <datalist id="list-tempo-servico">
+                    {Array.from({ length: 65 }, (_, i) => `${i + 1} ${i === 0 ? 'Ano' : 'Anos'}`).map((val) => (
+                      <option key={val} value={val} />
+                    ))}
+                  </datalist>
                 </div>
 
-                {/* Data de Nascimento */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1.5">Data de Nascimento</label>
-                  <input
-                    type="date"
-                    value={newDataNascimento}
-                    onChange={(e) => setNewDataNascimento(e.target.value)}
-                    className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-800 font-medium focus:outline-hidden focus:border-indigo-500"
-                  />
-                </div>
+                {/* Nº de Seguro Social / INSS */}
+                {newIsEfetivo && (
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1.5">Nº de Seguro Social (INSS) *</label>
+                    <input
+                      type="text"
+                      required={newIsEfetivo}
+                      value={newNumSeguroSocial}
+                      onChange={(e) => setNewNumSeguroSocial(e.target.value)}
+                      placeholder="Ex: 00928374"
+                      className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-800 font-mono font-semibold focus:outline-hidden focus:border-indigo-500"
+                    />
+                  </div>
+                )}
+              </div>
 
-                {/* Nº de Seguro Social */}
+              {/* REESTRUTURAÇÃO DAS HABILITAÇÕES LITERÁRIAS */}
+              <div className="pt-3 border-t border-slate-200 space-y-3">
+                {/* SELECTOR DE HABILITAÇÕES LITERÁRIAS */}
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1.5">Nº de Seguro Social / INSS</label>
-                  <input
-                    type="text"
-                    value={newNumSeguroSocial}
-                    onChange={(e) => setNewNumSeguroSocial(e.target.value)}
-                    placeholder="Ex: 00928374"
-                    className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-800 font-mono font-semibold focus:outline-hidden focus:border-indigo-500"
-                  />
-                </div>
-
-                {/* Habilitações Literárias */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1.5">Habilitações Literárias</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Habilitações Literárias *
+                  </label>
                   <select
                     value={newHabilitacoesLiterarias}
-                    onChange={(e) => setNewHabilitacoesLiterarias(e.target.value)}
-                    className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-800 font-bold focus:outline-hidden focus:border-indigo-500 cursor-pointer"
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setNewHabilitacoesLiterarias(val);
+                      if (val === 'Técnico Médio') {
+                        setNewHabilitacoesSuperior('');
+                      }
+                    }}
+                    className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2 text-xs font-bold text-slate-800 focus:outline-hidden focus:border-indigo-500 cursor-pointer"
                   >
-                    <option value="Licenciatura">Licenciatura</option>
-                    <option value="Bacharelato">Bacharelato</option>
-                    <option value="Mestrado">Mestrado</option>
-                    <option value="Doutoramento">Doutoramento</option>
+                    <option value="">-- Selecione as Habilitações --</option>
                     <option value="Técnico Médio">Técnico Médio</option>
-                    <option value="Ensino Secundário">Ensino Secundário</option>
+                    <option value="Licenciado">Licenciado</option>
+                    <option value="Mestre">Mestre</option>
+                    <option value="Doutoramento (PHD)">Doutoramento (PHD)</option>
                   </select>
                 </div>
 
-                {/* Género */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1.5">Género</label>
-                  <select
-                    value={newGenero}
-                    onChange={(e) => setNewGenero(e.target.value as 'M' | 'F')}
-                    className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-800 font-bold focus:outline-hidden focus:border-indigo-500 cursor-pointer"
-                  >
-                    <option value="M">Masculino (M)</option>
-                    <option value="F">Feminino (F)</option>
-                  </select>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {/* Ensino Médio / Técnico */}
+                  <div className="bg-white border border-slate-200 p-3 rounded-xl space-y-1.5">
+                    <label className="block text-[11px] font-bold text-slate-700 uppercase">
+                      Ensino Médio / Técnico *
+                    </label>
+                    <input
+                      type="text"
+                      required={newHabilitacoesLiterarias === 'Técnico Médio' || !newHabilitacoesSuperior.trim()}
+                      value={newHabilitacoesMedio}
+                      onChange={(e) => setNewHabilitacoesMedio(e.target.value)}
+                      placeholder="Ex: Técnico Médio em Pedagogia / 12ª Cl."
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-xs text-slate-800 font-semibold focus:outline-hidden focus:border-indigo-500 focus:bg-white"
+                    />
+                  </div>
+
+                  {/* Ensino Superior / Licenciatura */}
+                  <div className={`border p-3 rounded-xl space-y-1.5 transition-all ${
+                    newHabilitacoesLiterarias === 'Técnico Médio'
+                      ? 'bg-slate-100/70 border-slate-200 opacity-60'
+                      : 'bg-white border-slate-200'
+                  }`}>
+                    <label className="block text-[11px] font-bold text-slate-700 uppercase">
+                      Ensino Superior / Licenciatura {newHabilitacoesLiterarias !== 'Técnico Médio' && '*'}
+                    </label>
+                    <input
+                      type="text"
+                      disabled={newHabilitacoesLiterarias === 'Técnico Médio'}
+                      required={newHabilitacoesLiterarias !== 'Técnico Médio' && !newHabilitacoesMedio.trim()}
+                      value={newHabilitacoesLiterarias === 'Técnico Médio' ? '' : newHabilitacoesSuperior}
+                      onChange={(e) => setNewHabilitacoesSuperior(e.target.value)}
+                      placeholder={
+                        newHabilitacoesLiterarias === 'Técnico Médio'
+                          ? 'Desativado (Apenas para Licenciado, Mestre ou PHD)'
+                          : 'Ex: Licenciatura em Ensino da Matemática'
+                      }
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-xs text-slate-800 font-semibold focus:outline-hidden focus:border-indigo-500 focus:bg-white disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed"
+                    />
+                  </div>
                 </div>
               </div>
             </div>
@@ -2154,21 +3988,6 @@ export default function RecursosHumanos({
               </>
             )}
 
-            {/* Campos Específicos para Professores */}
-            {newRole === 'PROFESSOR' && (
-              <div>
-                <label className="block text-xs font-bold text-slate-755 mb-1.5 text-indigo-600">Habilitações Literárias *</label>
-                <select
-                  value={newCategoriaPedagogica}
-                  onChange={(e) => setNewCategoriaPedagogica(e.target.value)}
-                  className="w-full bg-indigo-50/20 border border-indigo-200 rounded-xl px-3.5 py-2.5 text-xs text-slate-800 focus:outline-hidden focus:border-indigo-500 focus:bg-white cursor-pointer font-bold"
-                >
-                  <option value="Técnico Médio">Técnico Médio</option>
-                  <option value="Licenciado">Licenciado</option>
-                  <option value="Mestre">Mestre</option>
-                </select>
-              </div>
-            )}
 
             {/* Campos Específicos para Auxiliar de Limpeza */}
             {newRole === 'AUXILIAR_LIMPEZA' && (
@@ -2836,13 +4655,8 @@ export default function RecursosHumanos({
                                 <button
                                   type="button"
                                   onClick={() => {
+                                    startChefiaAction(selectedChefiaRole!, titular);
                                     setIsChefiaFormEditing(true);
-                                    setChefiaEditStaffId(titular.id);
-                                    setNewName(titular.name);
-                                    setNewId(titular.id);
-                                    setNewPassword(titular.password || '12345');
-                                    setNewGabinete(titular.gabinete || '');
-                                    setNewDecretoNomeacao(titular.decretoNomeacao || '');
                                   }}
                                   className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black transition-all shadow-xs flex items-center justify-center gap-2 cursor-pointer"
                                 >
@@ -2869,185 +4683,7 @@ export default function RecursosHumanos({
                         );
                       } else {
                         // Formulário de Cadastro / Edição Univalente
-                        return (
-                          <form onSubmit={handleChefiaSubmit} className="space-y-4">
-                            <div className="space-y-3.5 bg-slate-50 border border-slate-200 p-4.5 rounded-2xl">
-                              <h3 className="text-xs font-black text-slate-800 uppercase flex items-center gap-1.5 border-b border-slate-200 pb-2 mb-2">
-                                <Sparkles className="w-4 h-4 text-indigo-600" />
-                                <span>{chefiaEditStaffId ? 'Editar Cadastro de Chefia' : 'Nomear Titular para o Cargo'}</span>
-                              </h3>
-
-                              <div>
-                                <label className="block text-xs font-bold text-slate-600 mb-1">Nome Completo *</label>
-                                <input
-                                  type="text"
-                                  required
-                                  value={newName}
-                                  onChange={(e) => {
-                                    const val = e.target.value;
-                                    setNewName(val);
-                                    if (!chefiaEditStaffId) {
-                                      setNewId(generateStaffId(val || 'Novo', selectedChefiaRole, staffList.map(s => s.id)));
-                                    }
-                                  }}
-                                  onBlur={() => {
-                                    const formatted = formatarNomeProprio(newName);
-                                    setNewName(formatted);
-                                    if (!chefiaEditStaffId) {
-                                      setNewId(generateStaffId(formatted || 'Novo', selectedChefiaRole, staffList.map(s => s.id)));
-                                    }
-                                  }}
-                                  autoCapitalize="words"
-                                  placeholder="Ex: Manuel António Chilombo"
-                                  className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-hidden focus:border-indigo-500"
-                                />
-                                <p className="mt-1 text-[10px] text-slate-500">
-                                  Nota: Insira o nome respeitando a norma ortográfica. O sistema irá ajustar automaticamente as iniciais para maiúsculas.
-                                </p>
-                              </div>
-
-                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                <div>
-                                  <label className="block text-xs font-bold text-slate-600 mb-1">ID de Sessão *</label>
-                                  <input
-                                    type="text"
-                                    required
-                                    value={newId}
-                                    disabled={!!chefiaEditStaffId}
-                                    onChange={(e) => setNewId(e.target.value.trim().toUpperCase())}
-                                    placeholder="ID de Sessão"
-                                    className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-extrabold text-indigo-650 focus:outline-hidden focus:border-indigo-500 disabled:opacity-50"
-                                  />
-                                </div>
-                                <div>
-                                  <label className="block text-xs font-bold text-slate-600 mb-1">Senha de Acesso *</label>
-                                  <input
-                                    type="text"
-                                    required
-                                    value={newPassword}
-                                    onChange={(e) => setNewPassword(e.target.value)}
-                                    placeholder="Padrão: 12345"
-                                    className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold text-slate-800 focus:outline-hidden focus:border-indigo-500"
-                                  />
-                                </div>
-                              </div>
-
-                              <div>
-                                <label className="block text-xs font-bold text-slate-600 mb-1">Gabinete de Trabalho</label>
-                                <input
-                                  type="text"
-                                  value={newGabinete}
-                                  onChange={(e) => setNewGabinete(e.target.value)}
-                                  placeholder="Ex: Gabinete de Direcção"
-                                  className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-hidden focus:border-indigo-500"
-                                />
-                              </div>
-
-                              <div>
-                                <label className="block text-xs font-bold text-slate-600 mb-1">Decreto ou Despacho de Nomeação</label>
-                                <input
-                                  type="text"
-                                  value={newDecretoNomeacao}
-                                  onChange={(e) => setNewDecretoNomeacao(e.target.value)}
-                                  placeholder="Ex: Despacho Nº 105/MED-2025"
-                                  className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-hidden focus:border-indigo-500"
-                                />
-                              </div>
-
-                              {/* Vínculo & Efetividade */}
-                              <div className="space-y-3 pt-2 border-t border-slate-200">
-                                <label className="block text-xs font-black uppercase text-slate-800">
-                                  Vínculo Institucional & Efetividade
-                                </label>
-                                
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                                  <div>
-                                    <label className="block text-[11px] font-bold text-slate-600 mb-1">Funcionário Efetivo? *</label>
-                                    <select
-                                      value={newIsEfetivo ? 'SIM' : 'NAO'}
-                                      onChange={(e) => {
-                                        const isEf = e.target.value === 'SIM';
-                                        setNewIsEfetivo(isEf);
-                                        if (!isEf) setNewNumAgente('');
-                                      }}
-                                      className="w-full bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-bold text-slate-800"
-                                    >
-                                      <option value="SIM">Sim (Efetivo)</option>
-                                      <option value="NAO">Não (Contratado)</option>
-                                    </select>
-                                  </div>
-
-                                  {newIsEfetivo ? (
-                                    <div>
-                                      <label className="block text-[11px] font-bold text-emerald-800 mb-1">Nº de Agente *</label>
-                                      <input
-                                        type="text"
-                                        required
-                                        value={newNumAgente}
-                                        onChange={(e) => setNewNumAgente(e.target.value)}
-                                        placeholder="Ex: 849204"
-                                        className="w-full bg-emerald-50/30 border border-emerald-300 rounded-xl px-2.5 py-1.5 text-xs font-mono font-bold text-slate-900"
-                                      />
-                                    </div>
-                                  ) : (
-                                    <div>
-                                      <label className="block text-[11px] font-bold text-slate-400 mb-1">Nº de Agente</label>
-                                      <div className="py-1.5 px-2 bg-slate-100 border border-slate-200 rounded-xl text-[10px] text-slate-400 font-semibold italic text-center">
-                                        Não aplicável
-                                      </div>
-                                    </div>
-                                  )}
-                                </div>
-
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                                  <div>
-                                    <label className="block text-[11px] font-bold text-slate-600 mb-1">Contacto Telefónico *</label>
-                                    <input
-                                      type="tel"
-                                      required
-                                      value={newContact}
-                                      onChange={(e) => setNewContact(e.target.value)}
-                                      placeholder="Ex: 923 456 789"
-                                      className="w-full bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-mono font-bold text-slate-800"
-                                    />
-                                  </div>
-                                  <div>
-                                    <label className="block text-[11px] font-bold text-slate-600 mb-1">Categoria Profissional</label>
-                                    <input
-                                      type="text"
-                                      value={newCategoria}
-                                      onChange={(e) => setNewCategoria(e.target.value)}
-                                      placeholder="Ex: Quadro Superior"
-                                      className="w-full bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-medium text-slate-800"
-                                    />
-                                  </div>
-                                </div>
-                              </div>
-                            </div>
-
-                            <div className="flex justify-end gap-2.5 pt-2">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (chefiaEditStaffId) {
-                                    setIsChefiaFormEditing(false);
-                                  } else {
-                                    setSelectedChefiaRole(null);
-                                  }
-                                }}
-                                className="px-4 py-2 hover:bg-slate-100 text-slate-600 rounded-xl text-xs font-bold cursor-pointer"
-                              >
-                                Cancelar
-                              </button>
-                              <button
-                                type="submit"
-                                className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black shadow-xs transition-all cursor-pointer"
-                              >
-                                Gravar Titular
-                              </button>
-                            </div>
-                          </form>
-                        );
+                        return renderChefiaForm(true);
                       }
                     })()
                   ) : (
@@ -3057,171 +4693,7 @@ export default function RecursosHumanos({
 
                       if (isChefiaFormEditing) {
                         // Formulário de Cadastro / Edição para Técnicos
-                        return (
-                          <form onSubmit={handleChefiaSubmit} className="space-y-4">
-                            <div className="space-y-3.5 bg-slate-50 border border-slate-200 p-4.5 rounded-2xl">
-                              <h3 className="text-xs font-black text-slate-800 uppercase flex items-center gap-1.5 border-b border-slate-200 pb-2 mb-2">
-                                <Sparkles className="w-4 h-4 text-indigo-600" />
-                                <span>{chefiaEditStaffId ? 'Editar Cadastro de Técnico' : 'Adicionar Novo Técnico'}</span>
-                              </h3>
-
-                              <div>
-                                <label className="block text-xs font-bold text-slate-600 mb-1">Nome Completo do Técnico *</label>
-                                <input
-                                  type="text"
-                                  required
-                                  value={newName}
-                                  onChange={(e) => {
-                                    const val = e.target.value;
-                                    setNewName(val);
-                                    if (!chefiaEditStaffId) {
-                                      setNewId(generateStaffId(val || 'Tecnico', selectedChefiaRole, staffList.map(s => s.id)));
-                                    }
-                                  }}
-                                  onBlur={() => {
-                                    const formatted = formatarNomeProprio(newName);
-                                    setNewName(formatted);
-                                    if (!chefiaEditStaffId) {
-                                      setNewId(generateStaffId(formatted || 'Tecnico', selectedChefiaRole, staffList.map(s => s.id)));
-                                    }
-                                  }}
-                                  autoCapitalize="words"
-                                  placeholder="Ex: Maria Domingos Cabral"
-                                  className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-hidden focus:border-indigo-500"
-                                />
-                                <p className="mt-1 text-[10px] text-slate-500">
-                                  Nota: Insira o nome respeitando a norma ortográfica. O sistema irá ajustar automaticamente as iniciais para maiúsculas.
-                                </p>
-                              </div>
-
-                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                <div>
-                                  <label className="block text-xs font-bold text-slate-600 mb-1">ID de Sessão *</label>
-                                  <input
-                                    type="text"
-                                    required
-                                    value={newId}
-                                    disabled={!!chefiaEditStaffId}
-                                    onChange={(e) => setNewId(e.target.value.trim().toUpperCase())}
-                                    placeholder="ID de Sessão"
-                                    className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-extrabold text-indigo-650 focus:outline-hidden focus:border-indigo-500 disabled:opacity-50"
-                                  />
-                                </div>
-                                <div>
-                                  <label className="block text-xs font-bold text-slate-600 mb-1">Senha de Acesso *</label>
-                                  <input
-                                    type="text"
-                                    required
-                                    value={newPassword}
-                                    onChange={(e) => setNewPassword(e.target.value)}
-                                    placeholder="Padrão: 12345"
-                                    className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold text-slate-800 focus:outline-hidden focus:border-indigo-500"
-                                  />
-                                </div>
-                              </div>
-
-                              <div>
-                                <label className="block text-xs font-bold text-slate-600 mb-1">Contacto Telefónico *</label>
-                                <input
-                                  type="tel"
-                                  required
-                                  value={newContact}
-                                  onChange={(e) => setNewContact(e.target.value)}
-                                  placeholder="Ex: 923 456 789"
-                                  className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold text-slate-800 focus:outline-hidden focus:border-indigo-500"
-                                />
-                              </div>
-
-                              <div>
-                                <label className="block text-xs font-bold text-slate-600 mb-1">Gabinete / Departamento</label>
-                                <input
-                                  type="text"
-                                  value={newGabinete}
-                                  onChange={(e) => setNewGabinete(e.target.value)}
-                                  placeholder="Ex: Secretaria Pedagógica / Balcão A"
-                                  className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-hidden focus:border-indigo-500"
-                                />
-                              </div>
-
-                              <div>
-                                <label className="block text-xs font-bold text-slate-600 mb-1">Decreto ou Despacho de Nomeação</label>
-                                <input
-                                  type="text"
-                                  value={newDecretoNomeacao}
-                                  onChange={(e) => setNewDecretoNomeacao(e.target.value)}
-                                  placeholder="Ex: Contrato de Trabalho Nº 45/2026"
-                                  className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-hidden focus:border-indigo-500"
-                                />
-                              </div>
-
-                              {/* Vínculo & Efetividade */}
-                              <div className="space-y-3 pt-2 border-t border-slate-200">
-                                <label className="block text-xs font-black uppercase text-slate-800">
-                                  Vínculo Institucional & Efetividade
-                                </label>
-                                
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                                  <div>
-                                    <label className="block text-[11px] font-bold text-slate-600 mb-1">Funcionário Efetivo? *</label>
-                                    <select
-                                      value={newIsEfetivo ? 'SIM' : 'NAO'}
-                                      onChange={(e) => {
-                                        const isEf = e.target.value === 'SIM';
-                                        setNewIsEfetivo(isEf);
-                                        if (!isEf) setNewNumAgente('');
-                                      }}
-                                      className="w-full bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-bold text-slate-800"
-                                    >
-                                      <option value="SIM">Sim (Efetivo)</option>
-                                      <option value="NAO">Não (Contratado)</option>
-                                    </select>
-                                  </div>
-
-                                  {newIsEfetivo ? (
-                                    <div>
-                                      <label className="block text-[11px] font-bold text-emerald-800 mb-1">Nº de Agente *</label>
-                                      <input
-                                        type="text"
-                                        required
-                                        value={newNumAgente}
-                                        onChange={(e) => setNewNumAgente(e.target.value)}
-                                        placeholder="Ex: 849204"
-                                        className="w-full bg-emerald-50/30 border border-emerald-300 rounded-xl px-2.5 py-1.5 text-xs font-mono font-bold text-slate-900"
-                                      />
-                                    </div>
-                                  ) : (
-                                    <div>
-                                      <label className="block text-[11px] font-bold text-slate-400 mb-1">Nº de Agente</label>
-                                      <div className="py-1.5 px-2 bg-slate-100 border border-slate-200 rounded-xl text-[10px] text-slate-400 font-semibold italic text-center">
-                                        Não aplicável
-                                      </div>
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            </div>
-
-                            <div className="flex justify-end gap-2.5 pt-2">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setIsChefiaFormEditing(false);
-                                  setChefiaEditStaffId(null);
-                                  clearChefiaFields();
-                                }}
-                                className="px-4 py-2 hover:bg-slate-100 text-slate-600 rounded-xl text-xs font-bold cursor-pointer"
-                              >
-                                Voltar à Lista
-                              </button>
-                              <button
-                                type="submit"
-                                className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black shadow-xs transition-all cursor-pointer"
-                              >
-                                Gravar Registo
-                              </button>
-                            </div>
-                          </form>
-                        );
+                        return renderChefiaForm(false);
                       }
 
                       // Listagem dos técnicos existentes
@@ -3235,11 +4707,8 @@ export default function RecursosHumanos({
                               <button
                                 type="button"
                                 onClick={() => {
+                                  startChefiaAction(selectedChefiaRole!, undefined);
                                   setIsChefiaFormEditing(true);
-                                  setChefiaEditStaffId(null);
-                                  clearChefiaFields();
-                                  const generatedId = generateStaffId('Tecnico', selectedChefiaRole, staffList.map(s => s.id));
-                                  setNewId(generatedId);
                                 }}
                                 className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 rounded-xl text-[10px] font-black flex items-center gap-1 cursor-pointer transition-all"
                               >
@@ -3268,13 +4737,8 @@ export default function RecursosHumanos({
                                       <button
                                         type="button"
                                         onClick={() => {
+                                          startChefiaAction(selectedChefiaRole!, t);
                                           setIsChefiaFormEditing(true);
-                                          setChefiaEditStaffId(t.id);
-                                          setNewName(t.name);
-                                          setNewId(t.id);
-                                          setNewPassword(t.password || '12345');
-                                          setNewGabinete(t.gabinete || '');
-                                          setNewDecretoNomeacao(t.decretoNomeacao || '');
                                         }}
                                         className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all cursor-pointer"
                                         title="Editar registo"
@@ -3547,8 +5011,18 @@ export default function RecursosHumanos({
                     <tbody className="divide-y divide-slate-150 font-medium">
                       {filteredStaff.map((staff, index) => {
                         const isProf = staff.role === 'PROFESSOR';
-                        const listClasses = staff.classes || [];
-                        const listSubjects = staff.subjects || [];
+                        const listClasses = Array.from(new Set([
+                          ...(staff.classes || []),
+                          ...((staff.assignments || []).map(a => a.class))
+                        ]));
+                        const listSections = Array.from(new Set([
+                          ...(staff.sections || []),
+                          ...((staff.assignments || []).map(a => a.section))
+                        ]));
+                        const listSubjects = Array.from(new Set([
+                          ...(staff.subjects || []),
+                          ...((staff.assignments || []).map(a => a.subject) as SubjectType[])
+                        ]));
 
                         return (
                           <tr key={staff.id} className="hover:bg-slate-50/40 transition-colors">
@@ -3577,9 +5051,30 @@ export default function RecursosHumanos({
                               {isProf ? (
                                 <div className="space-y-0.5">
                                   {staff.specialty && <div><strong>Especialidade:</strong> {staff.specialty}</div>}
-                                  <div><strong>Classes:</strong> {listClasses.join(', ')}ª Cl</div>
-                                  <div><strong>Turmas:</strong> {staff.sections?.join(', ')}</div>
-                                  <div><strong>Matérias:</strong> {listSubjects.join(', ')}</div>
+                                  <div>
+                                    <strong>Classes:</strong>{' '}
+                                    {listClasses.length > 0 ? (
+                                      listClasses.map(c => `${c}ª`).join(', ')
+                                    ) : (
+                                      <span className="italic text-slate-400 font-normal">Nenhuma</span>
+                                    )}
+                                  </div>
+                                  <div>
+                                    <strong>Turmas:</strong>{' '}
+                                    {listSections.length > 0 ? (
+                                      listSections.map(s => `Turma ${s}`).join(', ')
+                                    ) : (
+                                      <span className="italic text-slate-400 font-normal">Nenhuma</span>
+                                    )}
+                                  </div>
+                                  <div>
+                                    <strong>Matérias:</strong>{' '}
+                                    {listSubjects.length > 0 ? (
+                                      listSubjects.join(', ')
+                                    ) : (
+                                      <span className="italic text-slate-400 font-normal">Nenhuma</span>
+                                    )}
+                                  </div>
                                 </div>
                               ) : ['DIRECTOR_GERAL', 'SUB_DIRECTOR_PEDAGOGICO', 'SUB_DIRECTOR_ADMINISTRATIVO', 'CHEFE_SECRETARIA', 'TECNICO_PEDAGOGICO', 'TECNICO_ADMINISTRATIVO'].includes(staff.role) ? (
                                 <div className="space-y-0.5 text-amber-800">
@@ -3748,13 +5243,8 @@ export default function RecursosHumanos({
                           <div className="space-y-2.5 pt-2">
                             <button
                               onClick={() => {
+                                startChefiaAction(selectedChefiaRole!, titular);
                                 setIsChefiaFormEditing(true);
-                                setChefiaEditStaffId(titular.id);
-                                setNewName(titular.name);
-                                setNewId(titular.id);
-                                setNewPassword(titular.password || '12345');
-                                setNewGabinete(titular.gabinete || '');
-                                setNewDecretoNomeacao(titular.decretoNomeacao || '');
                               }}
                               className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black transition-all shadow-xs flex items-center justify-center gap-2 cursor-pointer"
                             >
@@ -3780,162 +5270,7 @@ export default function RecursosHumanos({
                     );
                   } else {
                     // Formulário de Cadastro / Edição Univalente
-                    return (
-                      <form onSubmit={handleChefiaSubmit} className="space-y-4">
-                        <div className="space-y-3.5 bg-slate-50 border border-slate-200 p-4.5 rounded-2xl">
-                          <h3 className="text-xs font-black text-slate-800 uppercase flex items-center gap-1.5 border-b border-slate-200 pb-2 mb-2">
-                            <Sparkles className="w-4 h-4 text-indigo-600" />
-                            <span>{chefiaEditStaffId ? 'Editar Cadastro de Chefia' : 'Nomear Titular para o Cargo'}</span>
-                          </h3>
-
-                          <div>
-                            <label className="block text-xs font-bold text-slate-600 mb-1">Nome Completo *</label>
-                            <input
-                              type="text"
-                              required
-                              value={newName}
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                setNewName(val);
-                                if (!chefiaEditStaffId) {
-                                  setNewId(generateStaffId(val || 'Novo', selectedChefiaRole, staffList.map(s => s.id)));
-                                }
-                              }}
-                              placeholder="Ex: Manuel António Chilombo"
-                              className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-hidden focus:border-indigo-500"
-                            />
-                          </div>
-
-                          <div className="grid grid-cols-2 gap-3">
-                            <div>
-                              <label className="block text-xs font-bold text-slate-600 mb-1">ID de Sessão *</label>
-                              <input
-                                type="text"
-                                required
-                                value={newId}
-                                disabled={!!chefiaEditStaffId}
-                                onChange={(e) => setNewId(e.target.value.trim().toUpperCase())}
-                                placeholder="ID de Sessão"
-                                className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-extrabold text-indigo-650 focus:outline-hidden focus:border-indigo-500 disabled:opacity-50"
-                              />
-                            </div>
-                            <div>
-                              <label className="block text-xs font-bold text-slate-600 mb-1">Senha de Acesso *</label>
-                              <input
-                                type="text"
-                                required
-                                value={newPassword}
-                                onChange={(e) => setNewPassword(e.target.value)}
-                                placeholder="Padrão: 12345"
-                                className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold text-slate-800 focus:outline-hidden focus:border-indigo-500"
-                              />
-                            </div>
-                          </div>
-
-                          <div>
-                            <label className="block text-xs font-bold text-slate-600 mb-1">Gabinete de Trabalho</label>
-                            <input
-                              type="text"
-                              value={newGabinete}
-                              onChange={(e) => setNewGabinete(e.target.value)}
-                              placeholder="Ex: Gabinete de Direcção"
-                              className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-hidden focus:border-indigo-500"
-                            />
-                          </div>
-
-                          <div>
-                            <label className="block text-xs font-bold text-slate-600 mb-1">Decreto ou Despacho de Nomeação</label>
-                            <input
-                              type="text"
-                              value={newDecretoNomeacao}
-                              onChange={(e) => setNewDecretoNomeacao(e.target.value)}
-                              placeholder="Ex: Despacho Nº 105/MED-2025"
-                              className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-hidden focus:border-indigo-500"
-                            />
-                          </div>
-
-                          {/* Vínculo & Efetividade (Drawer Univalente) */}
-                          <div className="space-y-3 pt-2 border-t border-slate-200">
-                            <label className="block text-xs font-black uppercase text-slate-800">
-                              Vínculo Institucional & Efetividade
-                            </label>
-                            
-                            <div className="grid grid-cols-1 gap-2.5">
-                              <div>
-                                <label className="block text-[11px] font-bold text-slate-600 mb-1">Funcionário Efetivo? *</label>
-                                <select
-                                  value={newIsEfetivo ? 'SIM' : 'NAO'}
-                                  onChange={(e) => {
-                                    const isEf = e.target.value === 'SIM';
-                                    setNewIsEfetivo(isEf);
-                                    if (!isEf) setNewNumAgente('');
-                                  }}
-                                  className="w-full bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-bold text-slate-800 cursor-pointer"
-                                >
-                                  <option value="SIM">Sim (Efetivo)</option>
-                                  <option value="NAO">Não (Contratado)</option>
-                                </select>
-                              </div>
-
-                              {newIsEfetivo ? (
-                                <div>
-                                  <label className="block text-[11px] font-bold text-emerald-800 mb-1">Nº de Agente *</label>
-                                  <input
-                                    type="text"
-                                    required
-                                    value={newNumAgente}
-                                    onChange={(e) => setNewNumAgente(e.target.value)}
-                                    placeholder="Ex: 849204"
-                                    className="w-full bg-emerald-50/30 border border-emerald-300 rounded-xl px-2.5 py-1.5 text-xs font-mono font-bold text-slate-900"
-                                  />
-                                </div>
-                              ) : (
-                                <div>
-                                  <label className="block text-[11px] font-bold text-slate-400 mb-1">Nº de Agente</label>
-                                  <div className="py-1.5 px-2 bg-slate-100 border border-slate-200 rounded-xl text-[10px] text-slate-400 font-semibold italic text-center">
-                                    Não aplicável
-                                  </div>
-                                </div>
-                              )}
-
-                              <div>
-                                <label className="block text-[11px] font-bold text-slate-600 mb-1">Contacto Telefónico *</label>
-                                <input
-                                  type="tel"
-                                  required
-                                  value={newContact}
-                                  onChange={(e) => setNewContact(e.target.value)}
-                                  placeholder="Ex: 923 456 789"
-                                  className="w-full bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-mono font-bold text-slate-800"
-                                />
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="flex justify-end gap-2.5 pt-2">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (chefiaEditStaffId) {
-                                setIsChefiaFormEditing(false);
-                              } else {
-                                setSelectedChefiaRole(null);
-                              }
-                            }}
-                            className="px-4 py-2 hover:bg-slate-100 text-slate-600 rounded-xl text-xs font-bold"
-                          >
-                            Cancelar
-                          </button>
-                          <button
-                            type="submit"
-                            className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black shadow-xs transition-all"
-                          >
-                            Gravar Titular
-                          </button>
-                        </div>
-                      </form>
-                    );
+                    return renderChefiaForm(true);
                   }
                 })()
               ) : (
@@ -3945,148 +5280,7 @@ export default function RecursosHumanos({
                   
                   if (isChefiaFormEditing) {
                     // Formulário de Cadastro / Edição para Técnicos
-                    return (
-                      <form onSubmit={handleChefiaSubmit} className="space-y-4">
-                        <div className="space-y-3.5 bg-slate-50 border border-slate-200 p-4.5 rounded-2xl">
-                          <h3 className="text-xs font-black text-slate-800 uppercase flex items-center gap-1.5 border-b border-slate-200 pb-2 mb-2">
-                            <Sparkles className="w-4 h-4 text-indigo-600" />
-                            <span>{chefiaEditStaffId ? 'Editar Cadastro de Técnico' : 'Adicionar Novo Técnico'}</span>
-                          </h3>
-
-                          <div>
-                            <label className="block text-xs font-bold text-slate-600 mb-1">Nome Completo do Técnico *</label>
-                            <input
-                              type="text"
-                              required
-                              value={newName}
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                setNewName(val);
-                                if (!chefiaEditStaffId) {
-                                  setNewId(generateStaffId(val || 'Tecnico', selectedChefiaRole, staffList.map(s => s.id)));
-                                }
-                              }}
-                              placeholder="Ex: Maria Domingos Cabral"
-                              className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-hidden focus:border-indigo-500"
-                            />
-                          </div>
-
-                          <div className="grid grid-cols-2 gap-3">
-                            <div>
-                              <label className="block text-xs font-bold text-slate-600 mb-1">ID de Sessão *</label>
-                              <input
-                                type="text"
-                                required
-                                value={newId}
-                                disabled={!!chefiaEditStaffId}
-                                onChange={(e) => setNewId(e.target.value.trim().toUpperCase())}
-                                placeholder="ID de Sessão"
-                                className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-extrabold text-indigo-650 focus:outline-hidden focus:border-indigo-500 disabled:opacity-50"
-                              />
-                            </div>
-                            <div>
-                              <label className="block text-xs font-bold text-slate-600 mb-1">Senha de Acesso *</label>
-                              <input
-                                type="text"
-                                required
-                                value={newPassword}
-                                onChange={(e) => setNewPassword(e.target.value)}
-                                placeholder="Padrão: 12345"
-                                className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold text-slate-800 focus:outline-hidden focus:border-indigo-500"
-                              />
-                            </div>
-                          </div>
-
-                          <div>
-                            <label className="block text-xs font-bold text-slate-600 mb-1">Gabinete / Departamento</label>
-                            <input
-                              type="text"
-                              value={newGabinete}
-                              onChange={(e) => setNewGabinete(e.target.value)}
-                              placeholder="Ex: Secretaria Pedagógica / Balcão A"
-                              className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-hidden focus:border-indigo-500"
-                            />
-                          </div>
-
-                          <div>
-                            <label className="block text-xs font-bold text-slate-600 mb-1">Decreto ou Despacho de Nomeação</label>
-                            <input
-                              type="text"
-                              value={newDecretoNomeacao}
-                              onChange={(e) => setNewDecretoNomeacao(e.target.value)}
-                              placeholder="Ex: Contrato de Trabalho Nº 45/2026"
-                              className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-hidden focus:border-indigo-500"
-                            />
-                          </div>
-
-                          {/* Vínculo & Efetividade (Drawer Multivalente) */}
-                          <div className="space-y-3 pt-2 border-t border-slate-200">
-                            <label className="block text-xs font-black uppercase text-slate-800">
-                              Vínculo Institucional & Efetividade
-                            </label>
-                            
-                            <div className="grid grid-cols-1 gap-2.5">
-                              <div>
-                                <label className="block text-[11px] font-bold text-slate-600 mb-1">Funcionário Efetivo? *</label>
-                                <select
-                                  value={newIsEfetivo ? 'SIM' : 'NAO'}
-                                  onChange={(e) => {
-                                    const isEf = e.target.value === 'SIM';
-                                    setNewIsEfetivo(isEf);
-                                    if (!isEf) setNewNumAgente('');
-                                  }}
-                                  className="w-full bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-bold text-slate-800 cursor-pointer"
-                                >
-                                  <option value="SIM">Sim (Efetivo)</option>
-                                  <option value="NAO">Não (Contratado)</option>
-                                </select>
-                              </div>
-
-                              {newIsEfetivo ? (
-                                <div>
-                                  <label className="block text-[11px] font-bold text-emerald-800 mb-1">Nº de Agente *</label>
-                                  <input
-                                    type="text"
-                                    required
-                                    value={newNumAgente}
-                                    onChange={(e) => setNewNumAgente(e.target.value)}
-                                    placeholder="Ex: 849204"
-                                    className="w-full bg-emerald-50/30 border border-emerald-300 rounded-xl px-2.5 py-1.5 text-xs font-mono font-bold text-slate-900"
-                                  />
-                                </div>
-                              ) : (
-                                <div>
-                                  <label className="block text-[11px] font-bold text-slate-400 mb-1">Nº de Agente</label>
-                                  <div className="py-1.5 px-2 bg-slate-100 border border-slate-200 rounded-xl text-[10px] text-slate-400 font-semibold italic text-center">
-                                    Não aplicável
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="flex justify-end gap-2.5 pt-2">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setIsChefiaFormEditing(false);
-                              setChefiaEditStaffId(null);
-                              clearChefiaFields();
-                            }}
-                            className="px-4 py-2 hover:bg-slate-100 text-slate-600 rounded-xl text-xs font-bold cursor-pointer"
-                          >
-                            Voltar à Lista
-                          </button>
-                          <button
-                            type="submit"
-                            className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black shadow-xs transition-all cursor-pointer"
-                          >
-                            Gravar Registo
-                          </button>
-                        </div>
-                      </form>
-                    );
+                    return renderChefiaForm(false);
                   }
 
                   // Listagem dos técnicos existentes
@@ -4100,11 +5294,8 @@ export default function RecursosHumanos({
                           <button
                             type="button"
                             onClick={() => {
+                              startChefiaAction(selectedChefiaRole!, undefined);
                               setIsChefiaFormEditing(true);
-                              setChefiaEditStaffId(null);
-                              clearChefiaFields();
-                              const generatedId = generateStaffId('Tecnico', selectedChefiaRole, staffList.map(s => s.id));
-                              setNewId(generatedId);
                             }}
                             className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 rounded-xl text-[10px] font-black flex items-center gap-1 cursor-pointer transition-all"
                           >
@@ -4133,13 +5324,8 @@ export default function RecursosHumanos({
                                   <button
                                     type="button"
                                     onClick={() => {
+                                      startChefiaAction(selectedChefiaRole!, t);
                                       setIsChefiaFormEditing(true);
-                                      setChefiaEditStaffId(t.id);
-                                      setNewName(t.name);
-                                      setNewId(t.id);
-                                      setNewPassword(t.password || '12345');
-                                      setNewGabinete(t.gabinete || '');
-                                      setNewDecretoNomeacao(t.decretoNomeacao || '');
                                     }}
                                     className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all cursor-pointer"
                                     title="Editar registo"
@@ -4471,13 +5657,26 @@ export default function RecursosHumanos({
 
                 <div>
                   <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">
-                    Especialidade
+                    Especialidade (Médio)
                   </label>
                   <input
                     type="text"
-                    value={efetividadeEspecialidade}
-                    onChange={(e) => setEfetividadeEspecialidade(e.target.value)}
-                    placeholder="Ex: Língua Portuguesa"
+                    value={efetividadeEspecialidadeMedio}
+                    onChange={(e) => setEfetividadeEspecialidadeMedio(e.target.value)}
+                    placeholder="Ex: Técnico de Enfermagem / Magistério"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-slate-800 focus:outline-hidden focus:border-indigo-500 font-medium"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">
+                    Especialidade (Superior)
+                  </label>
+                  <input
+                    type="text"
+                    value={efetividadeEspecialidadeSuperior}
+                    onChange={(e) => setEfetividadeEspecialidadeSuperior(e.target.value)}
+                    placeholder="Ex: Licenciatura em Ensino da Matemática"
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-slate-800 focus:outline-hidden focus:border-indigo-500 font-medium"
                   />
                 </div>
@@ -4525,6 +5724,267 @@ export default function RecursosHumanos({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DO RELATÓRIO DE FALTAS E ASSIDUIDADE (IMPRESSÃO & EXPORTAÇÃO PDF) */}
+      {showRelatorioFaltasModal && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 z-50 overflow-hidden animate-fadeIn no-print-backdrop">
+          <div className="bg-white rounded-2xl max-w-4xl w-full max-h-[92vh] flex flex-col shadow-2xl border border-slate-200 animate-scaleUp overflow-hidden">
+            {/* Topo Fixado do Modal (Ações e Fechar) */}
+            <div className="flex items-center justify-between border-b border-slate-200 p-4 sm:p-5 bg-white shrink-0 z-20 no-print shadow-xs">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-indigo-50 border border-indigo-200 text-indigo-600 rounded-xl">
+                  <Printer className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-sm sm:text-base font-black text-slate-900 uppercase tracking-tight">
+                    Relatório Oficial de Assiduidade & Faltas
+                  </h3>
+                  <p className="text-[11px] sm:text-xs text-slate-500 font-medium">
+                    Pronto para exportação em PDF e impressão institucional.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowRelatorioFaltasModal(false)}
+                  className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl transition-all cursor-pointer"
+                  title="Fechar"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Conteúdo com Scroll Interno para o Documento */}
+            <div className="flex-1 overflow-y-auto p-4 sm:p-8 space-y-6">
+              {/* DOCUMENTO IMPRESSO OFICIAL DE RELATÓRIO DE FALTAS */}
+              <div className="printable-faltas-area space-y-6 p-4 sm:p-6 border border-slate-300 rounded-xl bg-white text-slate-900 print:border-none print:p-0">
+                {/* Cabeçalho Oficial da Escola Angolana */}
+                <div className="text-center space-y-1 pb-4 border-b-2 border-slate-900">
+                  <div className="flex justify-center items-center mb-1">
+                    {(() => {
+                      const logoUrl = schoolSettings?.logoType === 'PUBLIC'
+                        ? (schoolSettings?.publicLogoUrl || '🇦🇴')
+                        : (schoolSettings?.privateLogoUrl || schoolSettings?.publicLogoUrl || '🎓');
+                      
+                      if (logoUrl && (logoUrl.startsWith('data:') || logoUrl.startsWith('http'))) {
+                        return (
+                          <img
+                            src={logoUrl}
+                            alt="Logótipo da Escola"
+                            className="h-12 w-auto object-contain mx-auto mb-1"
+                            referrerPolicy="no-referrer"
+                          />
+                        );
+                      }
+                      return (
+                        <div className="w-10 h-10 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-600 font-bold text-base mb-1 mx-auto">
+                          {logoUrl || '🇦🇴'}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                  {schoolSettings?.headerLine1Active !== false && (
+                    <p className="text-xs font-serif font-black uppercase tracking-widest text-slate-900">
+                      {schoolSettings?.headerLine1 || 'REPÚBLICA DE ANGOLA'}
+                    </p>
+                  )}
+                  {schoolSettings?.headerLine2Active !== false && (
+                    <p className="text-xs font-serif font-bold uppercase tracking-wider text-slate-800">
+                      {schoolSettings?.headerLine2 || 'MINISTÉRIO DA EDUCAÇÃO'}
+                    </p>
+                  )}
+                  {schoolSettings?.headerLine3Active !== false && (
+                    <p className="text-xs font-serif font-bold uppercase tracking-wider text-slate-800">
+                      {schoolSettings?.headerLine3 || `GOVERNO PROVINCIAL DE ${(schoolSettings?.province || 'LUANDA').toUpperCase()}`}
+                    </p>
+                  )}
+                  {schoolSettings?.headerLine4Active !== false && (
+                    <p className="text-xs font-serif font-semibold uppercase tracking-wider text-slate-800">
+                      {schoolSettings?.headerLine4 || `DIRECÇÃO MUNICIPAL DA EDUCAÇÃO DE ${(schoolSettings?.municipality || 'CAZENGA').toUpperCase()}`}
+                    </p>
+                  )}
+                  <p className="text-sm font-serif font-black uppercase tracking-tight text-slate-900 pt-1">
+                    {schoolSettings?.schoolName || 'INSTITUIÇÃO DE ENSINO PÚBLICO DE ANGOLA'}
+                  </p>
+                  <h2 className="text-base font-serif font-black uppercase tracking-tight text-indigo-950 pt-2 border-t border-slate-300 mt-2">
+                    RELATÓRIO DE ASSIDUIDADE E MAPA DE FALTAS DO PESSOAL
+                  </h2>
+                  <div className="flex flex-wrap items-center justify-center gap-4 text-[11px] font-mono text-slate-700 pt-1">
+                    <span>Turno / Filtro: <strong>{pontoFiltroTurno}</strong></span>
+                  </div>
+                </div>
+
+                {/* Quadro de Resumo Estatístico do Turno/Instituição */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
+                  <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
+                    <div className="text-[10px] font-bold text-slate-500 uppercase">Total de Pessoal (Geral)</div>
+                    <div className="text-lg font-black text-slate-900">
+                      {filteredStaffForAssiduidade.length}
+                    </div>
+                  </div>
+                  <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl">
+                    <div className="text-[10px] font-bold text-emerald-700 uppercase">Presenças Confirmadas</div>
+                    <div className="text-lg font-black text-emerald-800">
+                      {filteredStaffForAssiduidade.filter(s => {
+                        const r = pontoRecords.find(rec => rec.staffId === s.id && rec.date === pontoSelectedDate);
+                        return r?.status === 'PRESENTE' || r?.status === 'PRESENCA_JUSTIFICADA';
+                      }).length}
+                    </div>
+                  </div>
+                  <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl">
+                    <div className="text-[10px] font-bold text-rose-700 uppercase">Faltas Injustificadas (Inc. &gt;24h)</div>
+                    <div className="text-lg font-black text-rose-800">
+                      {filteredStaffForAssiduidade.filter(s => {
+                        const r = pontoRecords.find(rec => rec.staffId === s.id && rec.date === pontoSelectedDate);
+                        if (r?.status === 'FALTA_INJUSTIFICADA' || r?.status === 'FALTA_INJUSTIFICADA_PENDENTE') return true;
+                        if (!r && pontoSelectedDate < new Date().toISOString().split('T')[0]) return true;
+                        return false;
+                      }).length}
+                    </div>
+                  </div>
+                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl">
+                    <div className="text-[10px] font-bold text-amber-700 uppercase">Em Esclarecimento</div>
+                    <div className="text-lg font-black text-amber-800">
+                      {filteredStaffForAssiduidade.filter(s => {
+                        const r = pontoRecords.find(rec => rec.staffId === s.id && rec.date === pontoSelectedDate);
+                        return r?.statusWorkflow === 'AGUARDANDO_ESCLARECIMENTO';
+                      }).length}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Tabela Detalhada de Colaboradores (Efetivos e Não Efetivos) */}
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs border-collapse border border-slate-900">
+                    <thead className="bg-slate-100 uppercase text-[9px] font-black border-b border-slate-900">
+                      <tr>
+                        <th className="border border-slate-900 px-2 py-2 text-center">Nº</th>
+                        <th className="border border-slate-900 px-2 py-2">ID / Agente</th>
+                        <th className="border border-slate-900 px-2 py-2">Nome Completo do Colaborador</th>
+                        <th className="border border-slate-900 px-2 py-2">Cargo / Função</th>
+                        <th className="border border-slate-900 px-2 py-2 text-center">Vínculo</th>
+                        <th className="border border-slate-900 px-2 py-2 text-center">Turno</th>
+                        <th className="border border-slate-900 px-2 py-2 text-center">Estado no Dia</th>
+                        <th className="border border-slate-900 px-2 py-2 text-center">Intervalo Sem Assinatura</th>
+                        <th className="border border-slate-900 px-2 py-2 text-center">Nº Total Faltas</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredStaffForAssiduidade.map((s, idx) => {
+                        const rec = pontoRecords.find(r => r.staffId === s.id && r.date === pontoSelectedDate);
+                        const absSummary = getStaffAbsenceSummary(s.id);
+                        const isEf = s.isEfetivo === true || (s.isEfetivo === undefined && Boolean(s.numAgente && s.numAgente.trim()));
+                        const todayStrRel = new Date().toISOString().split('T')[0];
+                        const isPastRelDate = pontoSelectedDate < todayStrRel;
+
+                        return (
+                          <tr key={s.id} className="border-b border-slate-900">
+                            <td className="border border-slate-900 px-2 py-1.5 text-center font-bold">{idx + 1}</td>
+                            <td className="border border-slate-900 px-2 py-1.5 font-mono text-[11px]">{s.numAgente || s.id}</td>
+                            <td className="border border-slate-900 px-2 py-1.5 font-extrabold text-slate-900">{s.name}</td>
+                            <td className="border border-slate-900 px-2 py-1.5">{ROLE_LABELS[s.role as StaffRole] || s.role}</td>
+                            <td className="border border-slate-900 px-2 py-1.5 text-center font-bold text-[10px]">
+                              {isEf ? <span className="text-emerald-800">Efetivo</span> : <span className="text-amber-800">Contratado</span>}
+                            </td>
+                            <td className="border border-slate-900 px-2 py-1.5 text-center font-semibold">{s.periodoTrabalho || s.periodo || 'MATINAL'}</td>
+                            <td className="border border-slate-900 px-2 py-1.5 text-center font-black">
+                              {rec?.status === 'PRESENTE' ? (
+                                <span className="text-emerald-700">PRESENTE ({rec.timestamp || ''})</span>
+                              ) : rec?.status === 'PRESENCA_JUSTIFICADA' ? (
+                                <span className="text-sky-700">JUSTIFICADA</span>
+                              ) : rec?.status === 'FALTA_INJUSTIFICADA' ? (
+                                <span className="text-rose-700">FALTA INJUSTIFICADA</span>
+                              ) : rec?.statusWorkflow === 'AGUARDANDO_ESCLARECIMENTO' ? (
+                                <span className="text-amber-700">EM ESCLARECIMENTO</span>
+                              ) : isPastRelDate ? (
+                                <span className="text-rose-800 font-extrabold">FALTA INJUSTIFICADA (Auto &gt;24h)</span>
+                              ) : (
+                                <span className="text-slate-400 font-normal">NÃO ASSINADO</span>
+                              )}
+                            </td>
+                            <td className="border border-slate-900 px-2 py-1.5 text-center font-mono text-[10px] font-bold">
+                              {absSummary.totalFaltas > 0 ? (
+                                <span className="text-amber-900">{absSummary.intervaloStr}</span>
+                              ) : (
+                                <span className="text-slate-400 font-normal">Sem Faltas</span>
+                              )}
+                            </td>
+                            <td className="border border-slate-900 px-2 py-1.5 text-center font-bold font-mono">
+                              {absSummary.totalFaltas} Faltas
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Bloco de Assinatura Conforme o Perfil Emissor */}
+                <div className="pt-8 text-center space-y-1">
+                  {loggedInStaff?.role === 'COORDENADOR_TURNO' || loggedInStaff?.role === 'COORDENADOR' ? (
+                    <>
+                      <p className="text-xs font-serif font-black text-slate-900 uppercase tracking-wide">
+                        O Coordenador do Turno ({loggedInStaff.turnoCoordenado || loggedInStaff.periodoTrabalho || 'Matinal'})
+                      </p>
+                      <p className="text-[10px] font-serif text-slate-600">(Submetido ao Subdirector Administrativo - RH)</p>
+                      <div className="pt-8">
+                        <div className="w-72 mx-auto border-b border-slate-900"></div>
+                        <p className="text-xs font-serif italic font-bold text-slate-800 pt-1">
+                          ({loggedInStaff.name})
+                        </p>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-xs font-serif font-black text-slate-900 uppercase tracking-wide">
+                        O Subdirector Administrativo
+                      </p>
+                      <div className="pt-8">
+                        <div className="w-72 mx-auto border-b border-slate-900"></div>
+                        <p className="text-xs font-serif italic font-bold text-slate-800 pt-1">
+                          ({staffList.find(s => s.role === 'SUB_DIRECTOR_ADMINISTRATIVO')?.name || loggedInStaff?.name || 'Nome do Subdirector Administrativo'})
+                        </p>
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {/* Rodapé Inferior Oficial do Relatório */}
+                <div className="pt-6 border-t border-slate-300 mt-8 text-center text-xs font-mono text-slate-600">
+                  Data de Referência: <strong>{pontoSelectedDate}</strong> | Emitido por: <strong>SIGEP RH System</strong>
+                </div>
+              </div>
+            </div>
+
+            {/* Rodapé Fixo no fundo do Modal (Ações de Fecho / PDF para facilitado acesso) */}
+            <div className="border-t border-slate-200 p-3.5 sm:p-4 bg-slate-50 flex items-center justify-between shrink-0 no-print">
+              <p className="text-[11px] text-slate-500 font-medium">
+                Documento gerado em {pontoSelectedDate} • SiGeP RH System
+              </p>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={exportRelatorioFaltasPDF}
+                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs rounded-xl shadow-xs cursor-pointer flex items-center gap-2"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>Exportar em PDF</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowRelatorioFaltasModal(false)}
+                  className="px-4 py-2 bg-white hover:bg-slate-100 text-slate-700 font-extrabold text-xs rounded-xl border border-slate-300 shadow-xs cursor-pointer"
+                >
+                  Fechar / Voltar
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

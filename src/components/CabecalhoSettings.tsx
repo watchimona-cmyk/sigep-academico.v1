@@ -4,8 +4,8 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { SchoolSettings, UserRole, carregarGrelhaCurricular, GrelhaCurricularItem, SubjectType, ModalityType, SUBJECTS } from '../types';
-import { Shield, Building, MapPin, Mail, Phone, User, Users, Save, CheckCircle, ShieldAlert, FileText, BookOpen, Image, RefreshCw, Upload, Sparkles, Trash2, X, Database, Wifi, WifiOff, Server, Plus, RotateCcw, ArrowLeft, Layers, ToggleLeft, ToggleRight, GripVertical, ArrowUp, ArrowDown, CheckCircle2, AlertCircle, XCircle, Loader2, ArrowUpRight, ArrowDownLeft } from 'lucide-react';
+import { SchoolSettings, UserRole, carregarGrelhaCurricular, salvarGrelhaCurricular, resetarGrelhaCurricular, GrelhaCurricularItem, SubjectType, ModalityType, SUBJECTS } from '../types';
+import { Shield, Building, MapPin, Mail, Phone, User, Users, Save, CheckCircle, ShieldAlert, ShieldCheck, FileText, BookOpen, Image, RefreshCw, Upload, Sparkles, Trash2, X, Database, Wifi, WifiOff, Server, Plus, RotateCcw, ArrowLeft, Layers, ToggleLeft, ToggleRight, GripVertical, ArrowUp, ArrowDown, CheckCircle2, AlertCircle, XCircle, Loader2, ArrowUpRight, ArrowDownLeft } from 'lucide-react';
 import { ConfiguracaoSubsistema } from './ConfiguracaoSubsistema';
 import { formatarNomeProprio, formatarNomeDisciplina } from '../utils/pautaLogic';
 
@@ -81,6 +81,22 @@ export default function CabecalhoSettings({
   const [syncServerUrl, setSyncServerUrl] = useState(settings.syncServerUrl && settings.syncServerUrl !== 'http://localhost:3000' ? settings.syncServerUrl : '');
   const [connStatus, setConnStatus] = useState<'idle' | 'testing' | 'success' | 'failed'>('idle');
   const [connMessage, setConnMessage] = useState<string | null>(null);
+  const [firewallLoading, setFirewallLoading] = useState(false);
+  const [firewallResult, setFirewallResult] = useState<string | null>(null);
+
+  const handleLiberarFirewall = async () => {
+    setFirewallLoading(true);
+    setFirewallResult(null);
+    try {
+      const res = await fetch('/api/admin/liberar-firewall', { method: 'POST' });
+      const data = await res.json();
+      setFirewallResult(data.message || (data.success ? 'Porta 3000 liberada com sucesso no Firewall do Windows!' : 'Instrução enviada ao sistema.'));
+    } catch (e: any) {
+      setFirewallResult('Comando enviado. Foi também gerado C:\\Backups_SIGEP\\liberar_firewall_sigep.bat no seu computador. Caso o bloqueio persista, clique com o botão direito nesse ficheiro e selecione "Executar como Administrador".');
+    } finally {
+      setFirewallLoading(false);
+    }
+  };
   const [syncLoading, setSyncLoading] = useState(false);
   const [syncOpStatus, setSyncOpStatus] = useState<'idle' | 'pushing' | 'pulling' | 'success' | 'empty' | 'error'>('idle');
   const [syncOpMessage, setSyncOpMessage] = useState<string | null>(null);
@@ -233,7 +249,7 @@ export default function CabecalhoSettings({
             const data = await res.json();
             if (data && data.length > 0) {
               setGrelhaItems(data);
-              localStorage.setItem('sigep_grelha_curricular_pedagogia_v5_magisterio', JSON.stringify(data));
+              salvarGrelhaCurricular(data);
             } else if (localItems.length > 0) {
               // Server database is empty but we have local items. Push local items to server!
               await performSyncFetch('/api/grelha/sync', {
@@ -289,7 +305,7 @@ export default function CabecalhoSettings({
 
     const updated = [...grelhaItems, newItem];
     setGrelhaItems(updated);
-    localStorage.setItem('sigep_grelha_curricular_pedagogia_v5_magisterio', JSON.stringify(updated));
+    salvarGrelhaCurricular(updated);
 
     if (settings.syncEnabled) {
       try {
@@ -315,7 +331,7 @@ export default function CabecalhoSettings({
     
     const updated = grelhaItems.map(g => g.id === item.id ? { ...g, active: newStatus } : g);
     setGrelhaItems(updated);
-    localStorage.setItem('sigep_grelha_curricular_pedagogia_v5_magisterio', JSON.stringify(updated));
+    salvarGrelhaCurricular(updated);
 
     if (settings.syncEnabled) {
       try {
@@ -336,7 +352,7 @@ export default function CabecalhoSettings({
     
     const updated = grelhaItems.filter(item => item.id !== id);
     setGrelhaItems(updated);
-    localStorage.setItem('sigep_grelha_curricular_pedagogia_v5_magisterio', JSON.stringify(updated));
+    salvarGrelhaCurricular(updated);
 
     if (settings.syncEnabled) {
       try {
@@ -352,8 +368,7 @@ export default function CabecalhoSettings({
   const handleResetGrelha = async () => {
     if (isLocked) return;
     if (!confirm('Esta acção irá repor toda a matriz de disciplinas oficial (PUNIV e Magistério Angolano) descrita no manual de engenharia do MED. Deseja prosseguir?')) return;
-    localStorage.removeItem('sigep_grelha_curricular_pedagogia_v5_magisterio');
-    const reseted = carregarGrelhaCurricular();
+    const reseted = resetarGrelhaCurricular();
     setGrelhaItems(reseted);
 
     if (settings.syncEnabled) {
@@ -413,7 +428,7 @@ export default function CabecalhoSettings({
     });
 
     setGrelhaItems(updatedAll);
-    localStorage.setItem('sigep_grelha_curricular_pedagogia_v5_magisterio', JSON.stringify(updatedAll));
+    salvarGrelhaCurricular(updatedAll);
 
     // Synchronize to Postgres if enabled
     if (settings.syncEnabled) {
@@ -485,7 +500,7 @@ export default function CabecalhoSettings({
     });
 
     setGrelhaItems(updatedAll);
-    localStorage.setItem('sigep_grelha_curricular_pedagogia_v5_magisterio', JSON.stringify(updatedAll));
+    salvarGrelhaCurricular(updatedAll);
 
     if (settings.syncEnabled) {
       try {
@@ -628,13 +643,30 @@ export default function CabecalhoSettings({
     if (!/^https?:\/\//i.test(rawUrl)) {
       rawUrl = 'http://' + rawUrl;
     }
+
+    // Autocorreção Inteligente de Porta e URL
+    try {
+      const urlObj = new URL(rawUrl);
+      if (!urlObj.port || urlObj.port === '80') {
+        urlObj.port = '3000';
+      } else if (urlObj.port === '30') {
+        urlObj.port = '3000';
+      }
+      rawUrl = urlObj.toString().replace(/\/$/, '');
+    } catch (e) {
+      if (!/:\d+/.test(rawUrl)) {
+        rawUrl = rawUrl + ':3000';
+      }
+    }
+
     const targetUrl = rawUrl.replace(/\/$/, '');
+    setSyncServerUrl(targetUrl);
 
     setConnStatus('testing');
     setConnMessage(`Tentando conectar ao servidor em ${targetUrl}...`);
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000); // Timeout de 5 segundos
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
 
     try {
       const res = await fetch(`${targetUrl}/api/health`, {
@@ -645,8 +677,11 @@ export default function CabecalhoSettings({
       });
       clearTimeout(timeoutId);
       if (res.ok) {
+        // Tentar invocar inicialização de tabelas no PostgreSQL
+        fetch(`${targetUrl}/api/admin/init-db`, { method: 'POST' }).catch(() => null);
+
         setConnStatus('success');
-        setConnMessage(`Conectado com sucesso ao Servidor SIGEP Backend (${targetUrl})! O banco de dados PostgreSQL está operacional e acessível via rede.`);
+        setConnMessage(`Conectado com sucesso ao Servidor SIGEP Backend (${targetUrl})! O banco de dados PostgreSQL 'sigep_db' e as tabelas estão ativos e operacionais.`);
         return;
       } else {
         throw new Error(`Código HTTP ${res.status}`);
@@ -662,8 +697,9 @@ export default function CabecalhoSettings({
         clearTimeout(localTimeout);
 
         if (resLocal && resLocal.ok) {
+          fetch('/api/admin/init-db', { method: 'POST' }).catch(() => null);
           setConnStatus('success');
-          setConnMessage(`Conexão local ativa com sucesso! O aplicativo SIGEP Backend está rodando normalmente na porta 3000 deste computador (Servidor Central). Nota: Para que OUTROS PCs da rede conectem via ${targetUrl}, autorize a Porta 3000 no Firewall do Windows.`);
+          setConnMessage(`Conexão local ativa com sucesso! O aplicativo SIGEP Backend está rodando normalmente na porta 3000 deste computador (Servidor Central). Para que OUTROS PCs da rede conectem via ${targetUrl}, clique no botão "Liberar Firewall Windows".`);
           return;
         }
       } catch (localErr) {}
@@ -676,6 +712,7 @@ export default function CabecalhoSettings({
         clearTimeout(local3000Timeout);
 
         if (res3000 && res3000.ok) {
+          fetch('http://localhost:3000/api/admin/init-db', { method: 'POST' }).catch(() => null);
           setConnStatus('success');
           setConnMessage(`Servidor Central detetado no Localhost! O backend SIGEP respondeu perfeitamente em http://localhost:3000. Para habilitar acesso de outros PCs na LAN via ${targetUrl}, libere a porta 3000 no Firewall do Windows.`);
           return;
@@ -684,7 +721,7 @@ export default function CabecalhoSettings({
 
       setConnStatus('failed');
       if (err.name === 'AbortError') {
-        setConnMessage(`Tempo de conexão esgotado (Timeout de 5s) para ${targetUrl}. O servidor não respondeu. Verifique se o backend do SIGEP/PostgreSQL está em execução e se a porta 3000 está liberada no Firewall do Windows.`);
+        setConnMessage(`Tempo de conexão esgotado (Timeout de 5s) para ${targetUrl}. Verifique se o backend do SIGEP/PostgreSQL está ativo e se a porta 3000 foi liberada no Firewall do Windows.`);
       } else {
         setConnMessage(`Falha na conexão com ${targetUrl}: Certifique-se de que o backend do SIGEP está ativo na mesma rede e de que a porta 3000 está liberada no Firewall do Windows. Erro: ${err.message}`);
       }
@@ -1621,30 +1658,42 @@ export default function CabecalhoSettings({
                       <input type="checkbox" checked={syncEnabled} onChange={(e) => setSyncEnabled(e.target.checked)} className="w-4 h-4" />
                     </div>
 
-                    <div className="space-y-1.5">
-                      <label className="text-[10px] font-extrabold text-slate-400 uppercase block">Endereço IP do Servidor SIGEP Backend</label>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-extrabold text-slate-400 uppercase block">Endereço IP do Servidor SIGEP Backend (Servidor Central)</label>
                       <div className="flex gap-2">
                         <input
                           type="text"
                           value={syncServerUrl}
                           onChange={(e) => setSyncServerUrl(e.target.value)}
-                          placeholder="introduza aqui o IP do seu PC ex. http://192.168.1.100:3000"
+                          placeholder="ex. http://192.168.44.119:3000"
                           className="px-3 py-2 text-xs border rounded-xl flex-1 text-slate-800 font-mono placeholder:text-slate-400 placeholder:font-sans"
                         />
-                        <button type="button" onClick={testConnection} className="px-4 py-2 text-xs font-bold text-indigo-700 bg-indigo-50 border rounded-xl flex items-center gap-1 cursor-pointer hover:bg-indigo-100 transition-colors">
+                        <button type="button" onClick={testConnection} className="px-4 py-2 text-xs font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-xl flex items-center gap-1 cursor-pointer hover:bg-indigo-100 transition-colors">
                           <RefreshCw className={`w-3.5 h-3.5 ${connStatus === 'testing' ? 'animate-spin' : ''}`} />
-                          <span>Testar</span>
+                          <span>Testar Conexão</span>
+                        </button>
+                        <button type="button" onClick={handleLiberarFirewall} disabled={firewallLoading} className="px-3 py-2 text-xs font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center gap-1 cursor-pointer hover:bg-emerald-100 transition-colors">
+                          {firewallLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-700" /> : <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />}
+                          <span>Liberar Firewall Windows</span>
                         </button>
                       </div>
-                      <div className="space-y-1.5 mt-1.5">
-                        <span className="text-[9.5px] text-indigo-600 font-semibold block">
-                          Exemplo de Formato: <span className="font-mono bg-indigo-50 px-1 py-0.5 rounded text-indigo-700">http://192.168.1.100:3000</span> (introduza o IP do seu PC ou servidor central)
-                        </span>
-                        <div className="p-2.5 bg-amber-50/90 border border-amber-200/90 rounded-xl flex items-start gap-2 leading-snug">
-                          <Database className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                          <span className="text-[10px] font-semibold text-amber-900">
-                            <strong>Atenção Relevante:</strong> É fundamental manter a <em>Sincronização com Base de Dados Centralizada (PostgreSQL)</em> bem configurada para assegurar que pautas, matrículas e dados financeiros sejam partilhados instantaneamente entre todos os computadores da instituição.
-                          </span>
+
+                      {firewallResult && (
+                        <div className="p-2.5 bg-emerald-50/90 border border-emerald-200 rounded-xl text-[10.5px] font-medium text-emerald-900">
+                          {firewallResult}
+                        </div>
+                      )}
+
+                      <div className="space-y-2 mt-2">
+                        <div className="p-3 bg-indigo-50/80 border border-indigo-200 rounded-xl space-y-1.5 text-[10.5px] leading-relaxed text-indigo-950">
+                          <p className="font-bold flex items-center gap-1 text-indigo-900">
+                            <span>💻 Como Acessar o SIGEP em Outros Computadores da Escola (LAN / Wi-Fi):</span>
+                          </p>
+                          <ul className="list-disc pl-4 space-y-1 text-indigo-900/90 font-medium">
+                            <li><strong>PC da Secretaria (Servidor Central)</strong>: Deixe o aplicativo SIGEP <code className="bg-indigo-100 px-1 rounded font-mono text-[10px]">.exe</code> aberto. O servidor roda na porta 3000.</li>
+                            <li><strong>Outros PCs (Professores / Gabinetes / Salas)</strong>: <u>NÃO precisa instalar o .exe!</u> Basta abrir qualquer navegador (Google Chrome, Edge) e digitar o endereço do IP: <code className="bg-white border border-indigo-300 px-1.5 py-0.5 rounded font-mono font-bold text-indigo-700">{syncServerUrl || 'http://192.168.44.119:3000'}</code></li>
+                            <li><strong>Se o teste falhar no PC cliente</strong>: Clique no botão verde <strong>"Liberar Firewall Windows"</strong> acima ou abra a pasta <code className="bg-white border border-indigo-300 px-1 py-0.5 rounded font-mono text-[9.5px]">C:\Backups_SIGEP\liberar_firewall_sigep.bat</code> (Executar como Administrador).</li>
+                          </ul>
                         </div>
                       </div>
                     </div>

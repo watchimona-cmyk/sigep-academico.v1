@@ -62,7 +62,7 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
             <div>
               <h1 className="text-2xl font-bold text-white mb-2">S.I.G.E.P. — Recuperação do Sistema</h1>
               <p className="text-slate-300 text-sm leading-relaxed">
-                Ocorreu uma exceção inesperada na inicialização do aplicativo. Você pode recarregar a página ou redefinir os dados em cache para restaurar o acesso.
+                Ocorreu uma exceção inesperada. Você pode recarregar o sistema para restaurar o acesso.
               </p>
             </div>
             {this.state.error && (
@@ -70,18 +70,12 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
                 {this.state.error.toString()}
               </div>
             )}
-            <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
+            <div className="flex items-center justify-center pt-2">
               <button
                 onClick={this.handleReset}
-                className="w-full sm:w-auto px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-lg text-sm transition-all shadow-md"
+                className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-lg text-sm transition-all shadow-md cursor-pointer"
               >
                 Recarregar Sistema
-              </button>
-              <button
-                onClick={this.handleClearCache}
-                className="w-full sm:w-auto px-5 py-2.5 bg-slate-700 hover:bg-slate-600 text-slate-200 font-semibold rounded-lg text-sm transition-all"
-              >
-                Limpar Cache e Recarregar
               </button>
             </div>
           </div>

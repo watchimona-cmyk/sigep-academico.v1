@@ -40,6 +40,206 @@ export interface AttendanceClassSummary {
   alunosCriticos: number; // Alunos com > 10 faltas
 }
 
+export interface BIClassRowPDF {
+  className: string;
+  totalAlunos: number;
+  regulares: number;
+  parciais: number;
+  integrais: number;
+  totalArrecadado: number;
+  totalDivida: number;
+  totalMultas: number;
+  totalPrevisto: number;
+}
+
+/**
+ * Generates Official Financial BI Report PDF by Class
+ */
+export function generateBiPorClassePDF(
+  biRows: BIClassRowPDF[],
+  schoolSettings?: SchoolSettings,
+  subdirectorAdminName?: string
+) {
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+
+  const schoolName = schoolSettings?.schoolName || 'INSTITUIÇÃO DE ENSINO PÚBLICO DE ANGOLA';
+  const municipalityStr = schoolSettings?.municipality || 'CAZENGA';
+  const provinceStr = schoolSettings?.province || 'LUANDA';
+  const sdaName = subdirectorAdminName || schoolSettings?.subdirectorAdminName || schoolSettings?.subdirectorName || 'Subdirector Administrativo';
+
+  let currentY = 10;
+
+  // Header Official Republic of Angola with Insignia / Logo
+  const logoUrl = schoolSettings?.logoType === 'PUBLIC' ? schoolSettings?.publicLogoUrl : (schoolSettings?.privateLogoUrl || schoolSettings?.publicLogoUrl);
+  let emblemAdded = false;
+
+  if (logoUrl && (logoUrl.startsWith('data:') || logoUrl.startsWith('http'))) {
+    try {
+      let format = 'PNG';
+      if (logoUrl.includes('image/jpeg') || logoUrl.includes('image/jpg')) format = 'JPEG';
+      else if (logoUrl.includes('image/gif')) format = 'GIF';
+      doc.addImage(logoUrl, format, 141, currentY, 14, 14);
+      emblemAdded = true;
+      currentY += 16;
+    } catch (err) {
+      console.error("Erro ao adicionar logotipo ao PDF:", err);
+    }
+  }
+
+  if (!emblemAdded) {
+    doc.setDrawColor(217, 119, 6);
+    doc.setFillColor(254, 243, 199);
+    doc.circle(148, currentY + 5, 5, 'FD');
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(5.5);
+    doc.setTextColor(180, 83, 9);
+    doc.text("SIGEP", 148, currentY + 6.5, { align: 'center' });
+    currentY += 13;
+  }
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8);
+  doc.setTextColor(51, 65, 85);
+  doc.text(schoolSettings?.headerLine1 || "REPÚBLICA DE ANGOLA", 148, currentY, { align: 'center' });
+  doc.text(schoolSettings?.headerLine2 || "MINISTÉRIO DA EDUCAÇÃO", 148, currentY + 4, { align: 'center' });
+  doc.text(schoolSettings?.headerLine3 || `GOVERNO PROVINCIAL DE ${provinceStr.toUpperCase()}`, 148, currentY + 8, { align: 'center' });
+  doc.text(schoolSettings?.headerLine4 || `DIRECÇÃO MUNICIPAL DA EDUCAÇÃO DE ${municipalityStr.toUpperCase()}`, 148, currentY + 12, { align: 'center' });
+
+  doc.setFontSize(9.5);
+  doc.setTextColor(15, 23, 42);
+  doc.text(schoolName.toUpperCase(), 148, currentY + 17, { align: 'center' });
+
+  doc.setDrawColor(79, 70, 229); // Indigo line
+  doc.setLineWidth(0.8);
+  doc.line(15, currentY + 20, 282, currentY + 20);
+
+  currentY += 26;
+
+  // Report Title
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(12);
+  doc.setTextColor(30, 41, 59);
+  doc.text("RELATÓRIO FINANCEIRO — ANÁLISE BI POR CLASSE", 148, currentY, { align: 'center' });
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8.5);
+  doc.setTextColor(100, 116, 139);
+  doc.text(`Ano Letivo: ${schoolSettings?.academicYear || '2025/2026'}  |  Data de Emissão: ${new Date().toLocaleDateString('pt-AO')}`, 148, currentY + 5, { align: 'center' });
+
+  currentY += 12;
+
+  // Compute Totals
+  const sumAlunos = biRows.reduce((sum, r) => sum + r.totalAlunos, 0);
+  const sumRegulares = biRows.reduce((sum, r) => sum + r.regulares, 0);
+  const sumParciais = biRows.reduce((sum, r) => sum + r.parciais, 0);
+  const sumIntegrais = biRows.reduce((sum, r) => sum + r.integrais, 0);
+  const sumArrecadado = biRows.reduce((sum, r) => sum + r.totalArrecadado, 0);
+  const sumDivida = biRows.reduce((sum, r) => sum + r.totalDivida, 0);
+  const sumMultas = biRows.reduce((sum, r) => sum + r.totalMultas, 0);
+  const sumPrevisto = biRows.reduce((sum, r) => sum + r.totalPrevisto, 0);
+
+  const tableData: (string | number)[][] = biRows.map(r => [
+    r.className,
+    r.totalAlunos.toString(),
+    r.regulares.toString(),
+    r.parciais.toString(),
+    r.integrais.toString(),
+    `${r.totalArrecadado.toLocaleString('pt-PT')} Kz`,
+    `${r.totalDivida.toLocaleString('pt-PT')} Kz`,
+    `${r.totalMultas.toLocaleString('pt-PT')} Kz`,
+    `${r.totalPrevisto.toLocaleString('pt-PT')} Kz`
+  ]);
+
+  // Total row
+  tableData.push([
+    'TOTAL GERAL',
+    sumAlunos.toString(),
+    sumRegulares.toString(),
+    sumParciais.toString(),
+    sumIntegrais.toString(),
+    `${sumArrecadado.toLocaleString('pt-PT')} Kz`,
+    `${sumDivida.toLocaleString('pt-PT')} Kz`,
+    `${sumMultas.toLocaleString('pt-PT')} Kz`,
+    `${sumPrevisto.toLocaleString('pt-PT')} Kz`
+  ]);
+
+  autoTable(doc, {
+    startY: currentY,
+    head: [['Classe', 'Alunos', 'Regulares', 'Parciais', 'Integrais', 'Total Arrecadado', 'Total Em Dívida', 'Multas Ativas', 'Previsto Geral']],
+    body: tableData,
+    theme: 'grid',
+    headStyles: { fillColor: [67, 56, 202], textColor: 255, fontSize: 8.5, fontStyle: 'bold', halign: 'center' },
+    bodyStyles: { fontSize: 8, textColor: [30, 41, 59] },
+    columnStyles: {
+      0: { fontStyle: 'bold', cellWidth: 32 },
+      1: { halign: 'center', cellWidth: 22 },
+      2: { halign: 'center', cellWidth: 22 },
+      3: { halign: 'center', cellWidth: 22 },
+      4: { halign: 'center', cellWidth: 22 },
+      5: { halign: 'right', fontStyle: 'bold', textColor: [4, 120, 87], cellWidth: 38 },
+      6: { halign: 'right', fontStyle: 'bold', textColor: [190, 18, 60], cellWidth: 38 },
+      7: { halign: 'right', fontStyle: 'bold', textColor: [180, 83, 9], cellWidth: 32 },
+      8: { halign: 'right', fontStyle: 'bold', textColor: [49, 46, 129], cellWidth: 38 }
+    },
+    didParseCell: (data) => {
+      if (data.row.index === tableData.length - 1) {
+        data.cell.styles.fontStyle = 'bold';
+        data.cell.styles.fillColor = [243, 244, 246];
+      }
+    },
+    margin: { left: 15, right: 15 }
+  });
+
+  currentY = (doc as any).lastAutoTable.finalY + 18;
+
+  if (currentY > 175) {
+    doc.addPage();
+    currentY = 25;
+  }
+
+  // Signatures
+  const colWidth = 65;
+  
+  // Col 1: Director Geral
+  doc.setDrawColor(100, 116, 139);
+  doc.setLineWidth(0.4);
+  doc.line(50, currentY, 50 + colWidth, currentY);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8);
+  doc.setTextColor(30, 41, 59);
+  doc.text("O Director Geral", 50 + colWidth / 2, currentY + 4, { align: 'center' });
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(7.5);
+  doc.text(`( ${schoolSettings?.directorName || 'Direcção Geral'} )`, 50 + colWidth / 2, currentY + 8, { align: 'center' });
+
+  // Col 2: Subdirector Administrativo
+  doc.line(180, currentY, 180 + colWidth, currentY);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8);
+  doc.text("O Subdirector Administrativo", 180 + colWidth / 2, currentY + 4, { align: 'center' });
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(7.5);
+  doc.text(`( ${sdaName} )`, 180 + colWidth / 2, currentY + 8, { align: 'center' });
+
+  // Footer
+  doc.setFontSize(7);
+  doc.setTextColor(148, 163, 184);
+  doc.text(`Relatório BI Financeiro por Classe emitido pelo SIGEP em ${new Date().toLocaleDateString('pt-AO')} às ${new Date().toLocaleTimeString('pt-AO')}`, 148, 200, { align: 'center' });
+
+  doc.save(`Relatorio_Financeiro_BI_Por_Classe_${new Date().toISOString().split('T')[0]}.pdf`);
+}
+
+export interface AttendanceClassSummary {
+  turmaLabel: string;
+  className: string;
+  section: string;
+  totalAlunos: number;
+  faltasInjustificadas: number;
+  faltasJustificadas: number;
+  totalFaltas: number;
+  alunosCriticos: number; // Alunos com > 10 faltas
+}
+
 const MESES_NOME = [
   "Setembro", "Outubro", "Novembro", "Dezembro",
   "Janeiro", "Fevereiro", "Março", "Abril",

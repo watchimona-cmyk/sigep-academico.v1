@@ -24,7 +24,9 @@ import {
   Layers,
   GraduationCap,
   CheckCircle,
-  Settings
+  Settings,
+  Filter,
+  X
 } from 'lucide-react';
 import { Student, GradeRow, SchoolSettings, ModalityType } from '../types';
 import EstatisticaFormativa from './EstatisticaFormativa';
@@ -33,6 +35,28 @@ import PautaExame12Classe from './PautaExame12Classe';
 import { ConfiguracaoEspecialidade } from './ConfiguracaoEspecialidade';
 import { useSchoolSettings } from '../context/SchoolSettingsContext';
 import SiGePLogo from './SiGePLogo';
+import { getSectionsList } from '../utils';
+
+const SPECIALTIES_PUNIV = [
+  { code: 'CFB', label: 'Biologia e Química (Bio-química)' },
+  { code: 'CEJ', label: 'Ciências Económico-Jurídicas (CEJ)' },
+  { code: 'CS', label: 'Ciências Sociais / Humanas (CS)' },
+  { code: 'AV', label: 'Artes Visuais (AV)' },
+];
+
+const SPECIALTIES_MAGISTERIO = [
+  { code: 'MF', label: 'Matemática e Física (Mat-Física)' },
+  { code: 'GH', label: 'História e Geografia (Geo-História)' },
+  { code: 'BQ', label: 'Biologia e Química (Bio-Química)' },
+  { code: 'LEMC', label: 'Português e EMC' },
+  { code: 'EP', label: 'Ensino Primário' },
+  { code: 'PE', label: 'Pré-Escolar' },
+  { code: 'ING_EMC', label: 'Inglês e EMC' },
+  { code: 'FRA_EMC', label: 'Francês e EMC' },
+  { code: 'EVP', label: 'Educação Visual e Plástica (EVP)' },
+  { code: 'EDF', label: 'Educação Física' },
+  { code: 'EMC', label: 'Educação Moral e Cívica' },
+];
 
 interface StatsDashboardProps {
   students: Student[];
@@ -73,6 +97,20 @@ export default function StatsDashboard({
 
   const modality = subsystemInfo?.modalityMap || activeModality || 'ENSINO_PRIMARIO';
 
+  // Estados locais para filtros dinâmicos na HOME / Painel Estatístico
+  const [filterSpecialty, setFilterSpecialty] = useState<string>('TODAS');
+  const [filterClass, setFilterClass] = useState<string>('TODAS');
+  const [filterTurma, setFilterTurma] = useState<string>('TODAS');
+  const [filterLanguage, setFilterLanguage] = useState<string>('TODAS');
+
+  // Reset de filtros quando a modalidade altera
+  React.useEffect(() => {
+    setFilterSpecialty('TODAS');
+    setFilterClass('TODAS');
+    setFilterTurma('TODAS');
+    setFilterLanguage('TODAS');
+  }, [modality]);
+
   // Helper matching function
   const matchModality = (student: Student, selectedModality: ModalityType) => {
     const clsNum = parseInt(student.class, 10);
@@ -98,6 +136,87 @@ export default function StatsDashboard({
       const isMagisterio = magisterioMatches.some(m => normSpec.includes(m) || spec.includes(m)) || student.class === '13';
       return (clsNum >= 10 && clsNum <= 13) && isMagisterio;
     }
+  };
+
+  const matchSpecialty = (student: Student, fSpec: string) => {
+    if (!fSpec || fSpec === 'TODAS' || fSpec === 'All') return true;
+    const spec = (student.specialty || '').trim().toUpperCase();
+    const target = fSpec.trim().toUpperCase();
+
+    if (spec === target) return true;
+
+    const normSpec = spec.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
+    const aliases: Record<string, string[]> = {
+      'CFB': ['CFB', 'BIOLOGICA', 'FISICA', 'CIENCIAS FISICAS'],
+      'CEJ': ['CEJ', 'ECONOMICO', 'JURIDICA'],
+      'CS': ['CS', 'CSH', 'SOCIAIS', 'HUMANAS'],
+      'AV': ['AV', 'ARTES', 'VISUAIS'],
+      'MF': ['MF', 'MATEMATICA', 'FISICA', 'MAT-FISICA'],
+      'GH': ['GH', 'HG', 'GEOGRAFIA', 'HISTORIA', 'GEO-HISTORIA'],
+      'BQ': ['BQ', 'BIOLOGIA', 'QUIMICA', 'BIO-QUIMICA', 'BIOQUIMICA'],
+      'LEMC': ['LEMC', 'PORTUGUES'],
+      'EP': ['EP', 'PRIMARIO', 'ENSINO PRIMARIO'],
+      'PE': ['PE', 'PRE', 'PRE-ESCOLAR', 'INFANCIA'],
+      'ING_EMC': ['ING_EMC', 'INGLES', 'INGLÊS'],
+      'FRA_EMC': ['FRA_EMC', 'FRANCES', 'FRANCÊS'],
+      'EVP': ['EVP', 'VISUAL', 'PLASTICA'],
+      'EDF': ['EDF', 'EDUCACAO FISICA', 'ED.F'],
+      'EMC': ['EMC', 'CIVICA', 'CÍVICA']
+    };
+
+    const list = aliases[target];
+    if (list) {
+      return list.some(k => normSpec.includes(k) || spec.includes(k));
+    }
+
+    return normSpec.includes(target);
+  };
+
+  const matchSection = (studentSection: string | undefined, fTurma: string) => {
+    if (!fTurma || fTurma === 'TODAS' || fTurma === 'All') return true;
+    if (!studentSection) return false;
+    const sSec = studentSection.trim().toUpperCase();
+    const target = fTurma.trim().toUpperCase();
+
+    if (sSec === target) return true;
+    if (sSec.endsWith(`-${target}`) || sSec.endsWith(` ${target}`)) return true;
+    if (target.endsWith(`-${sSec}`) || target.endsWith(` ${sSec}`)) return true;
+
+    return false;
+  };
+
+  const matchLanguage = (student: Student, fLang: string) => {
+    if (!fLang || fLang === 'TODAS' || fLang === 'All') return true;
+    const clsNum = parseInt(student.class, 10);
+    if (clsNum >= 7 && clsNum <= 9) {
+      const lang = (student.foreignLanguage || 'INGLÊS').toUpperCase();
+      if (fLang === 'INGLÊS') return lang.includes('ING');
+      if (fLang === 'FRANCÊS') return lang.includes('FRA');
+    }
+    return true;
+  };
+
+  const matchClass = (student: Student, fClass: string) => {
+    if (!fClass || fClass === 'TODAS' || fClass === 'All') return true;
+    const sClean = String(student.class || '').replace(/\D/g, '');
+    const fClean = String(fClass || '').replace(/\D/g, '');
+    return sClean === fClean || String(student.class || '').trim() === String(fClass).trim();
+  };
+
+  const getAvailableTurmas = () => {
+    if (modality === 'ENSINO_PRIMARIO') {
+      return getSectionsList('ENSINO_PRIMARIO');
+    }
+    if (filterSpecialty && filterSpecialty !== 'TODAS') {
+      return getSectionsList(modality, filterSpecialty);
+    }
+    const specs = modality === 'PUNIV' ? SPECIALTIES_PUNIV : SPECIALTIES_MAGISTERIO;
+    const allSections = new Set<string>(['A', 'B', 'C', 'D']);
+    specs.forEach(sp => {
+      getSectionsList(modality, sp.code).forEach(sec => allSections.add(sec));
+    });
+    return Array.from(allSections);
   };
 
   // Recuperação de Dados em Tempo Real (Fallbacks com LocalStorage)
@@ -130,12 +249,17 @@ export default function StatsDashboard({
   // Filtragem dos Alunos para os painéis gerais
   const filteredStudents = currentStudents.filter(s => {
     if (!matchModality(s, modality)) return false;
-    if (currentClass) {
-      const sClean = String(s.class || '').replace(/\D/g, '');
-      const curClean = String(currentClass || '').replace(/\D/g, '');
-      if (sClean !== curClean && String(s.class || '').trim() !== String(currentClass).trim()) return false;
+
+    if (modality === 'ENSINO_PRIMARIO') {
+      if (!matchClass(s, filterClass)) return false;
+      if (!matchSection(s.section, filterTurma)) return false;
+      if (!matchLanguage(s, filterLanguage)) return false;
+    } else {
+      if (!matchSpecialty(s, filterSpecialty)) return false;
+      if (!matchClass(s, filterClass)) return false;
+      if (!matchSection(s.section, filterTurma)) return false;
     }
-    if (currentSection && s.section !== currentSection) return false;
+
     return true;
   });
 
@@ -171,7 +295,16 @@ export default function StatsDashboard({
       const clClean = String(cl || '').replace(/\D/g, '');
       if (sClean !== clClean && String(s.class || '').trim() !== String(cl).trim()) return false;
       if (!matchModality(s, modality)) return false;
-      if (currentSection && s.section !== currentSection) return false;
+
+      if (modality === 'ENSINO_PRIMARIO') {
+        if (!matchSection(s.section, filterTurma)) return false;
+        if (!matchLanguage(s, filterLanguage)) return false;
+        if (filterClass !== 'TODAS' && sClean !== String(filterClass).replace(/\D/g, '')) return false;
+      } else {
+        if (!matchSpecialty(s, filterSpecialty)) return false;
+        if (!matchSection(s.section, filterTurma)) return false;
+      }
+
       return true;
     });
 
@@ -339,37 +472,147 @@ export default function StatsDashboard({
         </button>
       </div>
 
-      {/* Active Filters Info Badge */}
-      <div className="bg-slate-50 border border-slate-200/60 rounded-xl px-4 py-2.5 flex items-center justify-between text-xs text-slate-650 font-semibold shadow-2xs">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-[10px] bg-slate-200 text-slate-700 px-2 py-0.5 rounded-md font-extrabold uppercase tracking-wider font-heading">Filtros Activos</span>
-          <div className="flex items-center gap-1.5 text-slate-700">
-            <span>Subsistema:</span>
-            <span className="font-extrabold text-indigo-700">
-              {modality === 'ENSINO_PRIMARIO' ? 'Ensino Primário' : modality === 'PUNIV' ? 'PUNIV (Liceus)' : 'Ensino Pedagógico (Magistério)'}
-            </span>
+      {/* Painel Mestre de Filtros do Painel Geral (Acima da Grelha) */}
+      <div className="bg-white p-4.5 rounded-2xl border border-slate-200/80 shadow-2xs space-y-3.5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
+          <div className="flex items-center gap-2.5">
+            <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl">
+              <Filter className="w-4 h-4" />
+            </div>
+            <div>
+              <h4 className="text-xs font-black text-slate-800 uppercase tracking-wider font-heading">Filtros Dinâmicos do Painel Geral</h4>
+              <p className="text-[10px] text-slate-400 font-medium">Filtre dados e métricas por Subsistema, Curso/Especialidade, Classe, Turma ou Língua</p>
+            </div>
           </div>
-          {currentClass && (
-            <>
-              <span className="text-slate-300">•</span>
-              <div className="flex items-center gap-1.5 text-slate-700">
-                <span>Classe:</span>
-                <span className="font-extrabold text-indigo-700">{currentClass}ª Classe</span>
-              </div>
-            </>
-          )}
-          {currentSection && (
-            <>
-              <span className="text-slate-300">•</span>
-              <div className="flex items-center gap-1.5 text-slate-700">
-                <span>Turma:</span>
-                <span className="font-extrabold text-indigo-700">Turma {currentSection}</span>
-              </div>
-            </>
-          )}
+
+          <div className="flex items-center gap-2">
+            {(filterClass !== 'TODAS' || filterTurma !== 'TODAS' || filterSpecialty !== 'TODAS' || filterLanguage !== 'TODAS') && (
+              <button
+                onClick={() => {
+                  setFilterClass('TODAS');
+                  setFilterTurma('TODAS');
+                  setFilterSpecialty('TODAS');
+                  setFilterLanguage('TODAS');
+                }}
+                className="text-[10px] font-bold text-rose-600 bg-rose-50 hover:bg-rose-100 px-3 py-1.5 rounded-xl border border-rose-200/60 transition-colors cursor-pointer flex items-center gap-1 shadow-2xs"
+              >
+                <X className="w-3.5 h-3.5" />
+                Limpar Filtros
+              </button>
+            )}
+            <div className="text-[10px] text-indigo-900 font-mono font-black uppercase bg-indigo-50 border border-indigo-150 px-3 py-1.5 rounded-xl shadow-2xs">
+              {filteredStudents.length} {filteredStudents.length === 1 ? 'aluno registado' : 'alunos registados'}
+            </div>
+          </div>
         </div>
-        <div className="text-[10px] text-indigo-950 font-mono font-extrabold uppercase bg-indigo-50/50 border border-indigo-100 px-2.5 py-1 rounded-lg">
-          Total: {filteredStudents.length} {filteredStudents.length === 1 ? 'aluno' : 'alunos'}
+
+        <div className="flex items-center gap-3 flex-wrap">
+          {modality === 'ENSINO_PRIMARIO' ? (
+            <>
+              {/* Filtro Classe (1ª a 9ª) */}
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider font-heading">Classe</label>
+                <select
+                  value={filterClass}
+                  onChange={(e) => setFilterClass(e.target.value)}
+                  className="bg-slate-50 text-indigo-950 border border-slate-250 px-3 py-1.5 rounded-xl text-xs font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 cursor-pointer min-w-[160px] shadow-2xs"
+                >
+                  <option value="TODAS">Todas as Classes (1ª-9ª)</option>
+                  <option value="1">1ª Classe</option>
+                  <option value="2">2ª Classe</option>
+                  <option value="3">3ª Classe</option>
+                  <option value="4">4ª Classe</option>
+                  <option value="5">5ª Classe</option>
+                  <option value="6">6ª Classe</option>
+                  <option value="7">7ª Classe</option>
+                  <option value="8">8ª Classe</option>
+                  <option value="9">9ª Classe</option>
+                </select>
+              </div>
+
+              {/* Filtro Turma */}
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider font-heading">Turma</label>
+                <select
+                  value={filterTurma}
+                  onChange={(e) => setFilterTurma(e.target.value)}
+                  className="bg-slate-50 text-indigo-950 border border-slate-250 px-3 py-1.5 rounded-xl text-xs font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 cursor-pointer min-w-[130px] shadow-2xs"
+                >
+                  <option value="TODAS">Todas as Turmas</option>
+                  {getAvailableTurmas().map(sec => (
+                    <option key={sec} value={sec}>Turma {sec}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Filtro Língua Estrangeira (7ª, 8ª, 9ª ou TODAS) */}
+              {(filterClass === 'TODAS' || filterClass === '7' || filterClass === '8' || filterClass === '9') && (
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider font-heading">Língua Estrangeira</label>
+                  <select
+                    value={filterLanguage}
+                    onChange={(e) => setFilterLanguage(e.target.value)}
+                    className="bg-slate-50 text-indigo-950 border border-slate-250 px-3 py-1.5 rounded-xl text-xs font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 cursor-pointer min-w-[140px] shadow-2xs"
+                  >
+                    <option value="TODAS">Todas as Línguas</option>
+                    <option value="INGLÊS">Inglês</option>
+                    <option value="FRANCÊS">Francês</option>
+                  </select>
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              {/* Filtro Especialidade / Curso */}
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider font-heading">Especialidade / Curso</label>
+                <select
+                  value={filterSpecialty}
+                  onChange={(e) => {
+                    setFilterSpecialty(e.target.value);
+                    setFilterTurma('TODAS');
+                  }}
+                  className="bg-slate-50 text-indigo-950 border border-slate-250 px-3 py-1.5 rounded-xl text-xs font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 cursor-pointer max-w-[250px] truncate shadow-2xs"
+                >
+                  <option value="TODAS">Todas as Especialidades</option>
+                  {(modality === 'PUNIV' ? SPECIALTIES_PUNIV : SPECIALTIES_MAGISTERIO).map(sp => (
+                    <option key={sp.code} value={sp.code}>{sp.label}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Filtro Classe */}
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider font-heading">Classe</label>
+                <select
+                  value={filterClass}
+                  onChange={(e) => setFilterClass(e.target.value)}
+                  className="bg-slate-50 text-indigo-950 border border-slate-250 px-3 py-1.5 rounded-xl text-xs font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 cursor-pointer min-w-[140px] shadow-2xs"
+                >
+                  <option value="TODAS">Todas as Classes</option>
+                  <option value="10">10ª Classe</option>
+                  <option value="11">11ª Classe</option>
+                  <option value="12">12ª Classe</option>
+                  {modality === 'MAGISTERIO' && <option value="13">13ª Classe</option>}
+                </select>
+              </div>
+
+              {/* Filtro Turma */}
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider font-heading">Turma</label>
+                <select
+                  value={filterTurma}
+                  onChange={(e) => setFilterTurma(e.target.value)}
+                  className="bg-slate-50 text-indigo-950 border border-slate-250 px-3 py-1.5 rounded-xl text-xs font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 cursor-pointer min-w-[130px] shadow-2xs"
+                >
+                  <option value="TODAS">Todas as Turmas</option>
+                  {getAvailableTurmas().map(sec => (
+                    <option key={sec} value={sec}>Turma {sec}</option>
+                  ))}
+                </select>
+              </div>
+            </>
+          )}
         </div>
       </div>
 
@@ -501,13 +744,17 @@ export default function StatsDashboard({
 
           {/* Tabela de Estatística de Início de Ano (Exigência do MED de Angola) */}
           <div className="bg-white p-6 rounded-2xl border border-slate-200/60 shadow-2xs space-y-4">
-            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-slate-100 pb-3 gap-3">
               <div className="flex items-center gap-2">
-                <FileSpreadsheet className="w-4.5 h-4.5 text-indigo-600" />
+                <FileSpreadsheet className="w-4.5 h-4.5 text-indigo-600 shrink-0" />
                 <div>
                   <h4 className="text-xs font-black text-slate-800 uppercase tracking-wider">Mapa Estatístico de Início das Matrículas por Classe & Género</h4>
                   <p className="text-[10px] text-slate-400 font-medium">Modelo de Consolidação Interna para a Direção e Coordenação Escolar.</p>
                 </div>
+              </div>
+
+              <div className="text-[10px] text-slate-500 font-bold bg-slate-50 px-3 py-1 rounded-lg border border-slate-200/60">
+                Resumo por Classe
               </div>
             </div>
 
@@ -516,8 +763,8 @@ export default function StatsDashboard({
                 <thead>
                   <tr className="bg-slate-900 text-white uppercase text-[9px] font-black tracking-wider border border-slate-850">
                     <th className="py-3 px-4 border border-slate-800">Classe Académica</th>
-                    <th className="py-3 px-4 border border-slate-800 text-center">Feminino (F)</th>
                     <th className="py-3 px-4 border border-slate-800 text-center">Masculino (M)</th>
+                    <th className="py-3 px-4 border border-slate-800 text-center">Feminino (F)</th>
                     <th className="py-3 px-4 border border-slate-800 text-center">Transferidos Entrada</th>
                     <th className="py-3 px-4 border border-slate-800 text-center">Transferidos Saída</th>
                     <th className="py-3 px-4 border border-slate-800 text-center">Frequência Física Regular</th>
@@ -530,7 +777,16 @@ export default function StatsDashboard({
                       const clClean = String(cl || '').replace(/\D/g, '');
                       if (sClean !== clClean && String(s.class || '').trim() !== String(cl).trim()) return false;
                       if (!matchModality(s, modality)) return false;
-                      if (currentSection && s.section !== currentSection) return false;
+
+                      if (modality === 'ENSINO_PRIMARIO') {
+                        if (!matchSection(s.section, filterTurma)) return false;
+                        if (!matchLanguage(s, filterLanguage)) return false;
+                        if (filterClass !== 'TODAS' && sClean !== String(filterClass).replace(/\D/g, '')) return false;
+                      } else {
+                        if (!matchSpecialty(s, filterSpecialty)) return false;
+                        if (!matchSection(s.section, filterTurma)) return false;
+                      }
+
                       return true;
                     });
 
@@ -555,8 +811,8 @@ export default function StatsDashboard({
                           {isRowHighlighted && <span className="w-1.5 h-1.5 bg-indigo-600 rounded-full animate-pulse shrink-0"></span>}
                           {cl}ª Classe
                         </td>
-                        <td className="py-2.5 px-4 border border-slate-150 text-center text-purple-700 font-extrabold">{clF}</td>
                         <td className="py-2.5 px-4 border border-slate-150 text-center text-indigo-700 font-extrabold">{clM}</td>
+                        <td className="py-2.5 px-4 border border-slate-150 text-center text-purple-700 font-extrabold">{clF}</td>
                         <td className="py-2.5 px-4 border border-slate-150 text-center text-emerald-600 font-black bg-emerald-50/20">{clTE}</td>
                         <td className="py-2.5 px-4 border border-slate-150 text-center text-rose-600 font-black bg-rose-50/20">{clTS}</td>
                         <td className="py-2.5 px-4 border border-slate-150 text-center text-slate-900 font-black bg-slate-50">{clTotal} Alunos</td>
@@ -565,8 +821,8 @@ export default function StatsDashboard({
                   })}
                   <tr className="bg-slate-100 font-black text-slate-950">
                     <td className="py-3 px-4 border border-slate-200 uppercase">Total Geral da Escola</td>
-                    <td className="py-3 px-4 border border-slate-200 text-center text-purple-800">{feminino}</td>
                     <td className="py-3 px-4 border border-slate-200 text-center text-indigo-800">{masculino}</td>
+                    <td className="py-3 px-4 border border-slate-200 text-center text-purple-800">{feminino}</td>
                     <td className="py-3 px-4 border border-slate-200 text-center text-emerald-700 bg-emerald-100/35">{transferidosEntrada}</td>
                     <td className="py-3 px-4 border border-slate-200 text-center text-rose-700 bg-rose-100/35">{transferidosSaida}</td>
                     <td className="py-3 px-4 border border-slate-200 text-center text-indigo-950 bg-indigo-100/30">{alunosAtivos} Alunos</td>

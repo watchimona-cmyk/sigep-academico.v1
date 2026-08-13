@@ -10,6 +10,45 @@ import { getSectionsList } from '../utils';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
+// Helper para cálculo e exibição rigorosa da idade do aluno
+export function getStudentAgeFormatted(student: any): string {
+  if (typeof student?.age === 'number' && !isNaN(student.age) && student.age > 0) {
+    return `${student.age}a`;
+  }
+  
+  const rawDate = student?.birthDate || student?.birth_date;
+  if (!rawDate) return '-';
+  
+  let birth: Date | null = null;
+  if (typeof rawDate === 'string') {
+    const cleanDate = rawDate.trim().split('T')[0];
+    if (cleanDate.includes('-')) {
+      const parts = cleanDate.split('-');
+      if (parts.length === 3) {
+        birth = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+      }
+    } else if (cleanDate.includes('/')) {
+      const parts = cleanDate.split('/');
+      if (parts.length === 3) {
+        birth = new Date(parseInt(parts[2], 10), parseInt(parts[1], 10) - 1, parseInt(parts[0], 10));
+      }
+    }
+  } else if (rawDate instanceof Date) {
+    birth = rawDate;
+  }
+
+  if (!birth || isNaN(birth.getTime())) return '-';
+
+  const today = new Date();
+  let calculatedAge = today.getFullYear() - birth.getFullYear();
+  const m = today.getMonth() - birth.getMonth();
+  if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) {
+    calculatedAge--;
+  }
+
+  return (calculatedAge >= 0 && calculatedAge < 120) ? `${calculatedAge}a` : '-';
+}
+
 interface RelacaoNominalProps {
   students: Student[];
   currentClass: string;
@@ -416,7 +455,7 @@ export default function RelacaoNominal({
         st.id || st.studentId || st.registrationId || '-',
         st.name.toUpperCase(),
         st.gender || '-',
-        st.age !== undefined ? `${st.age}a` : '-'
+        getStudentAgeFormatted(st)
       ]);
 
       autoTable(doc, {
@@ -984,7 +1023,7 @@ export default function RelacaoNominal({
                       </span>
                     </td>
                     <td className="border border-slate-200 p-2.5 text-center text-xs font-bold font-mono text-slate-700">
-                      {student.age !== undefined ? `${student.age}a` : '-'}
+                      {getStudentAgeFormatted(student)}
                     </td>
                   </tr>
                 ))

@@ -31,7 +31,7 @@ import {
   RefreshCw,
   FileText
 } from 'lucide-react';
-import { Student, GradeRow, SchoolSettings, Staff, UserRole, SubjectType, ModalityType, getSubjectsForStudent, carregarGrelhaCurricular, getSpecialtyFromSection, getSpecialtyFullName } from '../types';
+import { Student, GradeRow, SchoolSettings, Staff, UserRole, SubjectType, ModalityType, getSubjectsForStudent, getSubjectsForClass, carregarGrelhaCurricular, getSpecialtyFromSection, getSpecialtyFullName } from '../types';
 import { formatarNomePauta, gerarCodigoPauta } from '../utils/pautaLogic';
 import { getSectionsList } from '../utils';
 import { jsPDF } from 'jspdf';
@@ -130,6 +130,20 @@ export default function PainelMiniPautas({
 
 
 
+  const [grelhaVersion, setGrelhaVersion] = useState<number>(0);
+
+  useEffect(() => {
+    const handleGrelhaEvent = () => setGrelhaVersion(v => v + 1);
+    window.addEventListener('sigep_grelha_updated', handleGrelhaEvent);
+    window.addEventListener('sigep:data-updated', handleGrelhaEvent);
+    window.addEventListener('storage', handleGrelhaEvent);
+    return () => {
+      window.removeEventListener('sigep_grelha_updated', handleGrelhaEvent);
+      window.removeEventListener('sigep:data-updated', handleGrelhaEvent);
+      window.removeEventListener('storage', handleGrelhaEvent);
+    };
+  }, []);
+
   // --- ROLE CHECKS ---
   const isProfessorRole = userRole === 'PROFESSOR' || (loggedInStaff && loggedInStaff.role === 'PROFESSOR');
   
@@ -208,6 +222,12 @@ export default function PainelMiniPautas({
   };
 
   const isCellEditableByProfessor = (studentId: string, subject: string, trimester: 'I' | 'II' | 'III') => {
+    // -1. BLOCK TRANSFERRED OUT STUDENTS FROM RECEIVING GRADES
+    const targetStudent = students.find(s => s.id === studentId);
+    if (targetStudent && (targetStudent.isTransferidoSaida || (targetStudent.status as string) === 'TRANSFERIDO_SAIDA')) {
+      return false;
+    }
+
     // 0. STRICT PROFESSOR SUBJECT PERMISSION GATE:
     // A professor can ONLY launch or edit grades for subjects assigned during registration
     if (isProfessorRole && loggedInStaff && loggedInStaff.role === 'PROFESSOR') {
@@ -384,8 +404,17 @@ Validade: 2 Minutos (Expira em: ${new Date(newUnlock.expiresAt).toLocaleTimeStri
     };
 
     const currentReqs = JSON.parse(localStorage.getItem('sigep_grade_requests_v1') || '[]');
-    localStorage.setItem('sigep_grade_requests_v1', JSON.stringify([...currentReqs, newReq]));
+    const updatedReqs = [...currentReqs, newReq];
+    localStorage.setItem('sigep_grade_requests_v1', JSON.stringify(updatedReqs));
     window.dispatchEvent(new Event('storage'));
+    window.dispatchEvent(new CustomEvent('sigep_request_created', { detail: newReq }));
+
+    // Sync request with Central Server (PostgreSQL) for LAN/Wi-Fi propagation to Director General
+    fetch('/api/grade_requests', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updatedReqs)
+    }).catch(err => console.warn('Erro ao sincronizar solicitação com o servidor central:', err));
 
     // Write internal log message in the chat automatically
     try {
@@ -406,6 +435,7 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
         timestamp: new Date().toISOString()
       };
       localStorage.setItem('sigep_log_comunicacao_interna_v2', JSON.stringify([...chatLogs, reqMsg]));
+      window.dispatchEvent(new CustomEvent('sigep_chat_updated'));
     } catch (e) {
       console.error(e);
     }
@@ -719,16 +749,7 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
 
   // Get filtered subject list based on modality, specialty, class, and logged-in professor permissions
   const getFilteredSubjects = (): SubjectType[] => {
-    const grelha = carregarGrelhaCurricular();
-    const filtered = grelha.filter(item => {
-      if (item.active === false) return false;
-      const matchMod = item.modality === localModality;
-      const matchCl = item.class === localClass;
-      const matchSpec = localModality === 'ENSINO_PRIMARIO' ? true : item.specialty === localSpecialty;
-      return matchMod && matchCl && matchSpec;
-    });
-
-    let unique = Array.from(new Set(filtered.map(item => item.subject))) as SubjectType[];
+    let unique = getSubjectsForClass(localClass, localModality, localSpecialty) as SubjectType[];
 
     // If logged in user is a PROFESSOR, filter strictly by subjects assigned during registration in their profile
     if (isProfessorRole && loggedInStaff && loggedInStaff.role === 'PROFESSOR') {
@@ -784,13 +805,14 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
   };
 
   // Available sections for selected modality
-  const getSectionsForModality = (mod: ModalityType) => {
+  const getSectionsForModality = (mod: ModalityType, overrideSpecialty?: string) => {
     if (mod === 'ENSINO_PRIMARIO') {
       return getSectionsList('ENSINO_PRIMARIO');
     }
+    const specToUse = overrideSpecialty !== undefined ? overrideSpecialty : localSpecialty;
     // If we have a specific specialty (not 'GERAL'), get only those 4 sections
-    if (localSpecialty && localSpecialty !== 'GERAL' && localSpecialty !== 'All') {
-      return getSectionsList(mod, localSpecialty);
+    if (specToUse && specToUse !== 'GERAL' && specToUse !== 'All') {
+      return getSectionsList(mod, specToUse);
     }
     // Otherwise return all of them
     if (mod === 'PUNIV') {
@@ -911,23 +933,42 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
     ? (loggedInStaff.classes && loggedInStaff.classes.length > 0 ? loggedInStaff.classes : getClassesForModality(localModality))
     : getClassesForModality(localModality);
 
-  const getProfessorSections = () => {
-    if (!loggedInStaff || !loggedInStaff.sections || loggedInStaff.sections.length === 0) {
-      return getSectionsForModality(localModality);
+  // Synchronize localClass if current selection is not in availableClasses
+  useEffect(() => {
+    if (availableClasses.length > 0 && !availableClasses.includes(localClass)) {
+      setLocalClass(availableClasses[0]);
     }
-    if (localModality !== 'ENSINO_PRIMARIO' && localSpecialty) {
+  }, [JSON.stringify(availableClasses), localClass]);
+
+  const getProfessorSections = (overrideSpecialty?: string) => {
+    const specToUse = overrideSpecialty !== undefined ? overrideSpecialty : localSpecialty;
+    if (!loggedInStaff || !loggedInStaff.sections || loggedInStaff.sections.length === 0) {
+      return getSectionsForModality(localModality, specToUse);
+    }
+    if (localModality !== 'ENSINO_PRIMARIO' && specToUse) {
       const specSections = loggedInStaff.sections.filter(sec => {
         const spec = parseSpecialtyFromSection(sec);
-        return spec === localSpecialty || (spec as any) === 'GERAL';
+        return spec === specToUse || (spec as any) === 'GERAL';
       });
       if (specSections.length > 0) return specSections;
     }
     return loggedInStaff.sections;
   };
 
-  const availableSections = loggedInStaff && loggedInStaff.role === 'PROFESSOR'
-    ? getProfessorSections()
-    : getSectionsForModality(localModality);
+  const getAvailableSections = (overrideSpecialty?: string) => {
+    return loggedInStaff && loggedInStaff.role === 'PROFESSOR'
+      ? getProfessorSections(overrideSpecialty)
+      : getSectionsForModality(localModality, overrideSpecialty);
+  };
+
+  const availableSections = getAvailableSections();
+
+  // Synchronize localSection if current selection is not in availableSections
+  useEffect(() => {
+    if (availableSections.length > 0 && !availableSections.includes(localSection)) {
+      setLocalSection(availableSections[0]);
+    }
+  }, [JSON.stringify(availableSections), localSection]);
 
   const getFilteredStudents = () => {
     return students.filter(student => {
@@ -970,6 +1011,11 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
 
     // SECURITY CHECK:
     if (!isCellEditableByProfessor(studentId, localSubject, localTrimester)) {
+      const studentObjCheck = students.find(s => s.id === studentId);
+      if (studentObjCheck && (studentObjCheck.isTransferidoSaida || (studentObjCheck.status as string) === 'TRANSFERIDO_SAIDA')) {
+        alert('Aluno Transferido (Saída): Este aluno não pode receber notas na Mini-Pauta pois foi transferido para outra instituição.');
+        return;
+      }
       if (isTrimesterSequenceBlocked(localTrimester)) {
         alert(`Bloqueio de Sequência: Não é permitido lançar notas no ${localTrimester}º Trimestre porque o anterior ainda está activo/aberto. Solicite o fecho à Direcção.`);
         return;
@@ -1463,7 +1509,14 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
                     </label>
                     <select
                       value={localSpecialty}
-                      onChange={(e) => setLocalSpecialty(e.target.value)}
+                      onChange={(e) => {
+                        const newSpec = e.target.value;
+                        setLocalSpecialty(newSpec);
+                        const newSecs = getAvailableSections(newSpec);
+                        if (newSecs && newSecs.length > 0) {
+                          setLocalSection(newSecs[0]);
+                        }
+                      }}
                       className="bg-slate-50 border border-slate-200 text-xs font-bold rounded-lg px-2.5 py-1.5 w-full cursor-pointer focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 font-black text-indigo-950"
                     >
                       {availableSpecialtyOptions.map(opt => (
@@ -1810,11 +1863,21 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
                     const nptValue = row.npt !== null ? String(row.npt) : '';
                     const passScore = scoreMax / 2;
 
+                    const isTransfOut = !!student.isTransferidoSaida || (student.status as string) === 'TRANSFERIDO_SAIDA';
+                    const isInputDisabled = (isClosingPeriod && !forceEditByDir) || isTransfOut;
+
                     return (
-                      <tr key={student.id} className="hover:bg-slate-50/40 transition-all">
+                      <tr key={student.id} className={`hover:bg-slate-50/40 transition-all ${isTransfOut ? 'bg-rose-50/30' : ''}`}>
                         <td className="p-3.5 text-slate-400 font-bold font-mono">{index + 1}</td>
                         <td className="p-3.5 text-slate-500 font-bold font-mono text-[10.5px]">{student.id}</td>
-                        <td className="p-3.5 text-slate-800 font-extrabold text-[12px] truncate max-w-[220px]">{formatarNomePauta(student.name)}</td>
+                        <td className="p-3.5 text-slate-800 font-extrabold text-[12px] truncate max-w-[220px]">
+                          {formatarNomePauta(student.name)}
+                          {isTransfOut && (
+                            <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-[8.5px] font-black bg-rose-100 text-rose-700 border border-rose-200 uppercase tracking-wider">
+                              TRANSF. SAÍDA
+                            </span>
+                          )}
+                        </td>
                         <td className="p-3.5 text-center text-slate-500 font-bold font-mono">{student.gender || 'M'}</td>
                         
                         {/* MAC edit input */}
@@ -1823,10 +1886,10 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
                             key={`${student.id}_mac_${macValue}`}
                             type="text"
                             defaultValue={macValue}
-                            disabled={isClosingPeriod && !forceEditByDir}
+                            disabled={isInputDisabled}
                             placeholder="-"
                             onBlur={(e) => handleGradeChange(student.id, 'mac', e.target.value)}
-                            className={`w-16 mx-auto text-center px-2 py-1 text-xs font-black font-mono rounded-lg border focus:outline-hidden focus:ring-1 focus:ring-indigo-500 transition-all ${
+                            className={`w-16 mx-auto text-center px-2 py-1 text-xs font-black font-mono rounded-lg border focus:outline-hidden focus:ring-1 focus:ring-indigo-500 transition-all disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed ${
                               row.mac !== null && row.mac < passScore
                                 ? 'bg-rose-50 border-rose-200 text-rose-600 focus:border-rose-400'
                                 : 'bg-white border-slate-200 text-slate-800 focus:border-indigo-400'
@@ -1841,10 +1904,10 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
                               key={`${student.id}_npp_${nppValue}`}
                               type="text"
                               defaultValue={nppValue}
-                              disabled={isClosingPeriod && !forceEditByDir}
+                              disabled={isInputDisabled}
                               placeholder="-"
                               onBlur={(e) => handleGradeChange(student.id, 'npp', e.target.value)}
-                              className={`w-16 mx-auto text-center px-2 py-1 text-xs font-black font-mono rounded-lg border focus:outline-hidden focus:ring-1 focus:ring-indigo-500 transition-all ${
+                              className={`w-16 mx-auto text-center px-2 py-1 text-xs font-black font-mono rounded-lg border focus:outline-hidden focus:ring-1 focus:ring-indigo-500 transition-all disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed ${
                                 row.npp !== null && row.npp !== undefined && row.npp < passScore
                                   ? 'bg-rose-50 border-rose-200 text-rose-600 focus:border-rose-400'
                                   : 'bg-white border-slate-200 text-slate-800 focus:border-indigo-400'
@@ -1859,10 +1922,10 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
                             key={`${student.id}_npt_${nptValue}`}
                             type="text"
                             defaultValue={nptValue}
-                            disabled={isClosingPeriod && !forceEditByDir}
+                            disabled={isInputDisabled}
                             placeholder="-"
                             onBlur={(e) => handleGradeChange(student.id, 'npt', e.target.value)}
-                            className={`w-16 mx-auto text-center px-2 py-1 text-xs font-black font-mono rounded-lg border focus:outline-hidden focus:ring-1 focus:ring-indigo-500 transition-all ${
+                            className={`w-16 mx-auto text-center px-2 py-1 text-xs font-black font-mono rounded-lg border focus:outline-hidden focus:ring-1 focus:ring-indigo-500 transition-all disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed ${
                               row.npt !== null && row.npt < passScore
                                 ? 'bg-rose-50 border-rose-200 text-rose-600 focus:border-rose-400'
                                 : 'bg-white border-slate-200 text-slate-800 focus:border-indigo-400'

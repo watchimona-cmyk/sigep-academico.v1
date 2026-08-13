@@ -614,6 +614,30 @@ export const SEED_GRELHA_CURRICULAR: GrelhaCurricularItem[] = [
   })
 ];
 
+export function salvarGrelhaCurricular(items: GrelhaCurricularItem[]): void {
+  try {
+    localStorage.setItem('sigep_grelha_curricular_pedagogia_v5_magisterio', JSON.stringify(items));
+    window.dispatchEvent(new Event('storage'));
+    window.dispatchEvent(new CustomEvent('sigep_grelha_updated'));
+    window.dispatchEvent(new CustomEvent('sigep:data-updated'));
+  } catch (err) {
+    console.error("Erro ao salvar grelha curricular:", err);
+  }
+}
+
+export function resetarGrelhaCurricular(): GrelhaCurricularItem[] {
+  try {
+    localStorage.removeItem('sigep_grelha_curricular_pedagogia_v5_magisterio');
+    const seeded = carregarGrelhaCurricular();
+    window.dispatchEvent(new Event('storage'));
+    window.dispatchEvent(new CustomEvent('sigep_grelha_updated'));
+    window.dispatchEvent(new CustomEvent('sigep:data-updated'));
+    return seeded;
+  } catch (err) {
+    return carregarGrelhaCurricular();
+  }
+}
+
 export function carregarGrelhaCurricular(): GrelhaCurricularItem[] {
   try {
     const saved = localStorage.getItem('sigep_grelha_curricular_pedagogia_v5_magisterio');
@@ -657,6 +681,9 @@ export function getSubjectsForClass(className: string, activeModality?: Modality
     } catch (err) {}
   }
 
+  // Normalize class string: "10ª", "10", "10ª Classe" -> "10"
+  const targetClassNorm = (className || '').replace(/ª|º|ªClasse|ºClasse|Classe|\s/g, '').trim();
+
   // Resolve default specialty if missing in secondary education
   let resolvedSpecialty = specialty;
   if (!resolvedSpecialty && (modality === 'MAGISTERIO' || modality === 'PUNIV')) {
@@ -664,27 +691,44 @@ export function getSubjectsForClass(className: string, activeModality?: Modality
   }
 
   const grelha = carregarGrelhaCurricular();
+
   const filtered = grelha.filter(item => {
     if (item.active === false) return false; // Ignore inactive items
     if (item.modality !== modality) return false;
-    if (item.class !== className) return false;
+    
+    const itemClassNorm = (item.class || '').replace(/ª|º|ªClasse|ºClasse|Classe|\s/g, '').trim();
+    if (itemClassNorm !== targetClassNorm) return false;
+
     if ((modality === 'PUNIV' || modality === 'MAGISTERIO') && resolvedSpecialty) {
-      const itemSpec = (item.specialty || '').toUpperCase();
-      const resSpec = resolvedSpecialty.toUpperCase();
-      return itemSpec === resSpec || itemSpec === 'GERAL' || !item.specialty;
+      const itemSpec = (item.specialty || '').toUpperCase().trim();
+      const resSpec = resolvedSpecialty.toUpperCase().trim();
+
+      // Common/Geral subjects apply to all specialties
+      if (!itemSpec || itemSpec === 'GERAL') return true;
+      if (itemSpec === resSpec) return true;
+
+      // Group equivalences
+      if (['LEMC', 'ING_EMC', 'FRA_EMC', 'EMC'].includes(resSpec)) {
+        if (['LEMC', 'ING_EMC', 'FRA_EMC', 'EMC'].includes(itemSpec)) return true;
+      }
+      if (['EP'].includes(resSpec) && itemSpec === 'EP') return true;
+      if (['PE'].includes(resSpec) && itemSpec === 'PE') return true;
+      if (['MF', 'EDF'].includes(resSpec) && ['MF', 'EDF'].includes(itemSpec)) return true;
+
+      return false;
     }
     return true;
   });
 
-  if (filtered.length > 0) {
-    return Array.from(new Set(filtered.map(item => item.subject)));
-  }
+  // Extract unique subject names in the order defined in the curriculum matrix
+  const result: string[] = [];
+  filtered.forEach(item => {
+    if (item.subject && !result.includes(item.subject)) {
+      result.push(item.subject);
+    }
+  });
 
-  return [
-    'L. PORTUGUESA',
-    'MATEMATICA',
-    'ED. FISICA'
-  ];
+  return result;
 }
 
 export function getSpecialtyFromSection(section: string, modality?: string): 'CFB' | 'CEJ' | 'CS' | 'AV' | 'EP' | 'EI' | 'PE' | 'MF' | 'BQ' | 'LEMC' | 'GH' | 'ING_EMC' | 'FRA_EMC' | 'EVP' | 'EDF' | 'EMC' | undefined {
@@ -705,8 +749,8 @@ export function getSpecialtyFromSection(section: string, modality?: string): 'CF
   if (sec.includes('EVP')) return 'EVP';
   if (sec.includes('EDF') || sec.includes('EF')) return 'EDF';
   if (sec.includes('EMC')) return 'EMC';
-  if (sec.includes('EP')) return 'EP';
-  if (sec.includes('PRE') || sec.includes('PE')) return 'PE';
+  if (sec.includes('PRE') || sec.includes('INF')) return 'PE';
+  if (sec.includes('EP') || sec.includes('PRI')) return 'EP';
   
   return undefined;
 }
@@ -754,7 +798,7 @@ export function isFrenchSubject(sub: string): boolean {
   return u === 'L. FRANCESA' || u === 'LÍNGUA FRANCESA' || u === 'FRANCÊS' || u === 'FRANCES' || u.includes('FRANCÊS') || u.includes('FRANCES');
 }
 
-export function getSubjectsForStudent(student: Student, activeModality?: ModalityType): string[] {
+export function getSubjectsForStudent(student: Student, activeModality?: ModalityType, overrideSpecialty?: string): string[] {
   let modality: ModalityType = activeModality || 'ENSINO_PRIMARIO';
   if (!activeModality) {
     try {
@@ -765,7 +809,7 @@ export function getSubjectsForStudent(student: Student, activeModality?: Modalit
     } catch (err) {}
   }
 
-  const spec = getStudentSpecialty(student, modality);
+  const spec = overrideSpecialty || getStudentSpecialty(student, modality);
   let subjects = getSubjectsForClass(student.class, modality, spec);
 
   const lang = student.foreignLanguage || 'INGLÊS';
@@ -884,7 +928,11 @@ export interface Staff {
   subjects?: SubjectType[]; // assigned subjects
   assignments?: CurricularAssignment[]; // Atribuições acumuladas detalhadas (Classe + Turma + Disciplina)
   specialty?: string; // assigned specialty/ramo
+  specialtyMedio?: string; // Especialidade no Ensino Médio
+  specialtySuperior?: string; // Especialidade no Ensino Superior
   password?: string; // password/senhas
+  senha_expirada?: boolean; // Flag de expiração forçada de senha pós-restauro de segurança
+  password_expired?: boolean; // Alias para compatibilidade
   is_root?: boolean; // flag de utilizador raiz do sistema
   is_editable?: boolean; // flag para imutabilidade do utilizador
   
@@ -901,6 +949,8 @@ export interface Staff {
   numAgente?: string; // Nº de Agente
   isEfetivo?: boolean; // Vínculo: Efetivo (true) ou Não Efetivo/Contratado (false)
   periodoTrabalho?: 'MATINAL' | 'VESPERTINO' | 'NOTURNO' | 'ADMINISTRATIVO'; // Turno / Período de Trabalho do Ponto
+  periodo?: string; // Período de Trabalho (alias)
+  faltasInjustificadas?: number; // Contagem de faltas injustificadas acumuladas
 
   gabinete?: string; // Chefias
   decretoNomeacao?: string; // Chefias

@@ -314,6 +314,20 @@ export default function PautaAnnual({
     setAlertMsg(`✓ Notas da 13ª Classe gravadas com sucesso para o estudante ${selectedStudentId13}!`);
   };
 
+  const [grelhaVersion, setGrelhaVersion] = useState<number>(0);
+
+  useEffect(() => {
+    const handleGrelhaEvent = () => setGrelhaVersion(v => v + 1);
+    window.addEventListener('sigep_grelha_updated', handleGrelhaEvent);
+    window.addEventListener('sigep:data-updated', handleGrelhaEvent);
+    window.addEventListener('storage', handleGrelhaEvent);
+    return () => {
+      window.removeEventListener('sigep_grelha_updated', handleGrelhaEvent);
+      window.removeEventListener('sigep:data-updated', handleGrelhaEvent);
+      window.removeEventListener('storage', handleGrelhaEvent);
+    };
+  }, []);
+
   const handleSaveFormulaWeights = (newWeights: FormulaWeights) => {
     setWeights(newWeights);
     saveFormulaWeights(newWeights);
@@ -323,7 +337,7 @@ export default function PautaAnnual({
 
   // Find specialty of the current class/section
   const sectionStudents = students.filter(s => s.class === currentClass && s.section === currentSection);
-  const activeSpecialty = getSpecialtyFromSection(currentSection, activeModality);
+  const activeSpecialty = sectionStudents.find(s => s.specialty)?.specialty || getSpecialtyFromSection(currentSection, activeModality);
 
   // Active subjects list
   const classSubjects = getSubjectsForClass(currentClass, activeModality, activeSpecialty);
@@ -548,7 +562,7 @@ export default function PautaAnnual({
     const totalNotasAlunoEsperadas = realSubjectCount * 3;
     const minNotasParaAtivo = Math.max(1, Math.ceil(totalNotasAlunoEsperadas * 0.3));
 
-    if (student.status === 'Desistente' || (isClosingPeriod && totalNotasTrimestraisLancadas < minNotasParaAtivo)) {
+    if (student.status === 'Desistente' || student.isTransferidoSaida || (student.status as string) === 'TRANSFERIDO_SAIDA' || (isClosingPeriod && totalNotasTrimestraisLancadas < minNotasParaAtivo)) {
       mfGlobalInteira = 0;
       status = 'DESISTENTE';
     } else {

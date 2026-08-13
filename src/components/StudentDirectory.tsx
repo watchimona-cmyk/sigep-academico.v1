@@ -1838,7 +1838,19 @@ export default function StudentDirectory({
                                     return <span className="text-slate-700">{student.birthDate}</span>;
                                   }
                                 })()}</p>
-                                <p className="text-slate-700"><strong>Idade Calculada:</strong> {student.age !== undefined ? `${student.age} anos` : <span className="text-slate-350 italic">Não calculada</span>}</p>
+                                <p className="text-slate-700"><strong>Idade Calculada:</strong> {(() => {
+                                  if (typeof student.age === 'number' && !isNaN(student.age) && student.age > 0) return `${student.age} anos`;
+                                  if (!student.birthDate) return <span className="text-slate-350 italic">Não calculada</span>;
+                                  const parts = student.birthDate.trim().split('T')[0].split('-');
+                                  if (parts.length !== 3) return <span className="text-slate-350 italic">Não calculada</span>;
+                                  const d = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+                                  if (isNaN(d.getTime())) return <span className="text-slate-350 italic">Não calculada</span>;
+                                  const today = new Date();
+                                  let calculatedAge = today.getFullYear() - d.getFullYear();
+                                  const m = today.getMonth() - d.getMonth();
+                                  if (m < 0 || (m === 0 && today.getDate() < d.getDate())) calculatedAge--;
+                                  return calculatedAge >= 0 && calculatedAge < 120 ? `${calculatedAge} anos` : <span className="text-slate-350 italic">Não calculada</span>;
+                                })()}</p>
                               </div>
 
                               <div className="space-y-2">

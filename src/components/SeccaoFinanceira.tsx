@@ -11,6 +11,7 @@ import PainelAlertasChefia from './PainelAlertasChefia';
 import {
   generateFinancialQuarterlyPDF,
   generateAttendanceQuarterlyPDF,
+  generateBiPorClassePDF,
   getTrimesterName,
   getTrimesterForMonthIndex
 } from '../utils/reportPdfGenerator';
@@ -31,7 +32,8 @@ import {
   Lock,
   X,
   ArrowLeft,
-  ChevronRight
+  ChevronRight,
+  Download
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -1447,11 +1449,12 @@ export default function SeccaoFinanceira({
                 <span>Análise financeira</span>
               </h3>
               <button
-                onClick={() => window.print()}
-                className="bg-indigo-50 hover:bg-indigo-150 text-indigo-700 font-bold px-3 py-1.5 rounded-lg text-[10px] uppercase tracking-wide flex items-center gap-1 transition-all cursor-pointer border border-indigo-150"
+                type="button"
+                onClick={() => generateBiPorClassePDF(getBiReport(), schoolSettings, loggedInStaff?.name)}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white font-black px-3.5 py-2 rounded-xl text-[11px] uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer shadow-xs"
               >
-                <Printer className="w-3.5 h-3.5" />
-                <span>Imprimir Relatório</span>
+                <Download className="w-4 h-4" />
+                <span>Exportar PDF</span>
               </button>
             </div>
 

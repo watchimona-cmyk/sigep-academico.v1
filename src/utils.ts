@@ -127,8 +127,8 @@ export function sanitizeStaffList(staffList: Staff[]): Staff[] {
       }
     }
 
-    // Garantir que dados de disciplinas de professores não sumam
-    if (result.role === 'PROFESSOR') {
+    // Garantir que dados de disciplinas de professores e coordenadores docentes nunca sumam
+    if (result.role === 'PROFESSOR' || result.role?.includes('COORDENADOR') || (result.assignments && result.assignments.length > 0) || (result.subjects && result.subjects.length > 0)) {
       const hasAssignments = result.assignments && result.assignments.length > 0;
       const hasSubjects = result.subjects && result.subjects.length > 0;
 

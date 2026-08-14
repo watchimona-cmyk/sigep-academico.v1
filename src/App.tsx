@@ -752,35 +752,43 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
   };
 
   const handleRejectGradeRequest = (reqId: string) => {
-    const updated = gradeRequests.map(r => {
-      if (r.id === reqId) {
-        return {
-          ...r,
-          status: 'REJECTED',
-          rejectedAt: new Date().toISOString()
-        };
-      }
-      return r;
-    });
+    const targetReq = gradeRequests.find(r => r.id === reqId);
+    const updated = gradeRequests.filter(r => r.id !== reqId);
 
     localStorage.setItem('sigep_grade_requests_v1', JSON.stringify(updated));
     setGradeRequests(updated);
     window.dispatchEvent(new Event('storage'));
 
-    // Sync rejected request with central server
+    // Sync rejected request removal with central server
     fetch('/api/grade_requests', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updated)
     }).catch(() => {});
 
-    const targetReq = gradeRequests.find(r => r.id === reqId);
     if (targetReq && loggedInStaff) {
       logAction(
         loggedInStaff.name,
-        `Recusou alteração de notas para o aluno ${targetReq.studentName} na disciplina ${targetReq.subject} (${targetReq.trimester}º Trimestre)`,
+        `Indeferiu e expurgou da memória solicitação de notas para o aluno ${targetReq.studentName} na disciplina ${targetReq.subject} (${targetReq.trimester}º Trimestre)`,
         'Segurança Escolar'
       );
+
+      // Write in central chat
+      try {
+        const chatLogs = JSON.parse(localStorage.getItem('sigep_log_comunicacao_interna_v2') || '[]');
+        const rejMsg = {
+          id: `sys-rej-${Date.now()}`,
+          remetente_id: 'SYSTEM',
+          remetente_nome: 'Segurança SIGEP',
+          remetente_cargo: 'Indeferimento',
+          destinatario_id: 'pautas-pedagogico',
+          mensagem: `❌ PEDIDO D'ALTERAÇÃO DE NOTA INDEFERIDO:
+O Director/Subdirector ${loggedInStaff.name} indeferiu a solicitação de alteração de notas do aluno ${targetReq.studentName} na disciplina ${targetReq.subject}. A solicitação foi destruída da memória.`,
+          timestamp: new Date().toISOString()
+        };
+        localStorage.setItem('sigep_log_comunicacao_interna_v2', JSON.stringify([...chatLogs, rejMsg]));
+        window.dispatchEvent(new CustomEvent('sigep_chat_updated'));
+      } catch (e) {}
     }
   };
 
@@ -3858,14 +3866,16 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
             </div>
           )}
 
-          {/* BANNER UNIVERSAL OBRIGATÓRIO DE PRESENÇA / PONTO DIGITAL DA ESCOLA (OCULTO APÓS ASSINAR) */}
+          {/* BANNER UNIVERSAL OBRIGATÓRIO DE PRESENÇA / PONTO DIGITAL DA ESCOLA (PEDIDO APENAS UMA VEZ POR DIA) */}
           {loggedInStaff && (() => {
             const todayStr = new Date().toISOString().split('T')[0];
+            const dismissedKey = `sigep_ponto_dismissed_${loggedInStaff.id}_${todayStr}`;
+            const isDismissed = sessionStorage.getItem(dismissedKey) === 'true';
             const todayRec = pontoRecords.find(r => r.staffId === loggedInStaff.id && r.date === todayStr);
             const isPresent = todayRec?.status === 'PRESENTE' || todayRec?.status === 'PRESENCA_JUSTIFICADA';
             
-            // Oculta o banner após assinar a presença para não ocupar espaço na tela
-            if (isPresent) return null;
+            // Oculta o banner se o funcionário já tiver assinado a presença de hoje ou já tiver dispensado nesta sessão
+            if (isPresent || isDismissed) return null;
 
             const periodoStr = loggedInStaff.periodoTrabalho || loggedInStaff.periodo || 'MATINAL';
 
@@ -3878,7 +3888,7 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
                   <div>
                     <div className="flex items-center gap-2">
                       <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded border tracking-wider bg-rose-500/30 text-rose-200 border-rose-400/50 font-mono animate-pulse">
-                        🚨 PONTO DIGITAL OBRIGATÓRIO
+                        🚨 PONTO DIGITAL ÚNICO DIÁRIO
                       </span>
                       <span className="text-[10px] font-mono text-slate-300">
                         {todayStr}
@@ -3890,7 +3900,19 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
                   </div>
                 </div>
 
-                <div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      sessionStorage.setItem(dismissedKey, 'true');
+                      setPontoRecords([...pontoRecords]); // trigger re-render
+                    }}
+                    className="px-3 py-2 text-slate-300 hover:text-white hover:bg-white/10 rounded-xl text-xs font-semibold transition-all cursor-pointer"
+                    title="Lembrar mais tarde nesta sessão"
+                  >
+                    Dispensar
+                  </button>
+
                   <button
                     type="button"
                     onClick={() => {
@@ -3908,7 +3930,9 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
                       };
                       const updated = [...pontoRecords.filter(r => !(r.staffId === loggedInStaff.id && r.date === todayStr)), newRec];
                       savePontoRecords(updated);
-                      window.alert(`✅ Presença de ${loggedInStaff.name} confirmada com sucesso às ${nowTime}!`);
+                      sessionStorage.setItem(dismissedKey, 'true');
+                      setVbaLog(`✓ Presença de ${loggedInStaff.name} confirmada com sucesso às ${nowTime}!`);
+                      setTimeout(() => setVbaLog(null), 6000);
                     }}
                     className="px-5 py-2 bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white font-black text-xs rounded-xl shadow-lg transition-all cursor-pointer flex items-center gap-2 border border-rose-400/50 hover:scale-105 uppercase tracking-wider"
                   >
@@ -4664,6 +4688,7 @@ O Director/Subdirector ${loggedInStaff.name} assinou digitalmente a autorizaçã
                 {activeTab === 'Cadastro_BaseDados' && (
                   <PainelMatriculas
                     students={hermeticStudents}
+                    grades={hermeticGrades}
                     onAddStudent={handleAddStudent}
                     onDeleteStudent={handleDeleteStudent}
                     classes={classesList}

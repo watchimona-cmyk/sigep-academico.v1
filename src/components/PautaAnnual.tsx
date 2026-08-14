@@ -44,6 +44,7 @@ interface PautaAnnualProps {
   loggedInStaff?: Staff | null;
   schoolSettings?: SchoolSettings;
   activeModality?: 'ENSINO_PRIMARIO' | 'PUNIV' | 'MAGISTERIO';
+  selectedSpecialty?: string;
   useNpp?: boolean;
   onToggleNpp?: (val: boolean) => void;
   foreignLanguageProp?: 'INGLÊS' | 'FRANCÊS';
@@ -62,6 +63,7 @@ export default function PautaAnnual({
   loggedInStaff = null,
   schoolSettings,
   activeModality,
+  selectedSpecialty,
   useNpp,
   onToggleNpp,
   foreignLanguageProp
@@ -337,7 +339,7 @@ export default function PautaAnnual({
 
   // Find specialty of the current class/section
   const sectionStudents = students.filter(s => s.class === currentClass && s.section === currentSection);
-  const activeSpecialty = sectionStudents.find(s => s.specialty)?.specialty || getSpecialtyFromSection(currentSection, activeModality);
+  const activeSpecialty = selectedSpecialty || sectionStudents.find(s => s.specialty)?.specialty || getSpecialtyFromSection(currentSection, activeModality);
 
   // Active subjects list
   const classSubjects = getSubjectsForClass(currentClass, activeModality, activeSpecialty);
@@ -471,7 +473,7 @@ export default function PautaAnnual({
       };
     }
 
-    const studentSubjectsList = getSubjectsForStudent(student, activeModality);
+    const studentSubjectsList = getSubjectsForStudent(student, activeModality, activeSpecialty);
 
     let mfAcm = 0;
     let totalNotasTrimestraisLancadas = 0;

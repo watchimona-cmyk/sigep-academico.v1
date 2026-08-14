@@ -2013,7 +2013,7 @@ export default function CabecalhoSettings({
                         <option value="MF">Matemática e Física</option>
                         <option value="GH">História e Geografia</option>
                         <option value="BQ">Biologia e Química</option>
-                        <option value="LEMC">Português e EMC</option>
+                        <option value="LEMC">Português e EMC (L.EMC)</option>
                         <option value="ING_EMC">Inglês e EMC</option>
                         <option value="FRA_EMC">Francês e EMC</option>
                         <option value="EVP">Educação Visual e Plástica</option>

@@ -24,7 +24,7 @@ import {
   Lock,
   ArrowLeft
 } from 'lucide-react';
-import { Student, UserRole, Staff, ModalityType, getSpecialtyFullName } from '../types';
+import { Student, UserRole, Staff, ModalityType, getSpecialtyFullName, GradeRow } from '../types';
 import { generateStudentId, getSectionsList } from '../utils';
 import { formatarNomeProprio } from '../utils/pautaLogic';
 import { downloadComprovativoPDF, ComprovativoType } from '../utils/comprovativoGenerator';
@@ -32,6 +32,7 @@ import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { PROVINCIAS_E_MUNICIPIOS as LOCALIDADES_ANGOLA } from '../constants/dpa';
 import BiSectorSelect from './BiSectorSelect';
+import TransferenciaEmissaoModal from './TransferenciaEmissaoModal';
 
 interface Candidate {
   id: string;
@@ -74,6 +75,7 @@ interface PainelMatriculasProps {
   defaultActiveAba?: AbaMatriculaType;
   schoolSettings?: any;
   canEdit?: boolean;
+  grades?: GradeRow[];
 }
 
 type AbaMatriculaType = 'MENU' | 'REGULAR' | 'TRANSFERIDO_ENTRADA' | 'TRANSFERIDO_SAIDA' | 'LISTAGEM_GERAL' | 'GRELHA_PAUTA' | 'PROCESSO_ADMISSAO' | 'RECONFIRMACAO';
@@ -91,11 +93,25 @@ export default function PainelMatriculas({
   onClearPrefilledCandidate,
   defaultActiveAba,
   schoolSettings,
-  canEdit = true
+  canEdit = true,
+  grades = []
 }: PainelMatriculasProps) {
   
   const [abaAtiva, setAbaAtiva] = useState<AbaMatriculaType>(defaultActiveAba || 'MENU'); // Iniciar no MENU por padrão de facilidade de uso
   const [comprovativoData, setComprovativoData] = useState<{ type: ComprovativoType; data: any } | null>(null);
+
+  // Estado para Emissão Oficial de Guia e Boletim de Transferência (Saída)
+  const [modalTransferenciaEmissao, setModalTransferenciaEmissao] = useState<{
+    isOpen: boolean;
+    student: Student | null;
+    guiaNumero?: string;
+    escolaDestino?: string;
+    provinciaDestino?: string;
+    motivo?: string;
+  }>({
+    isOpen: false,
+    student: null
+  });
 
   useEffect(() => {
     if (defaultActiveAba) {
@@ -242,7 +258,7 @@ export default function PainelMatriculas({
         { code: 'PE', name: 'Pré-Escolar (PE)' },
         { code: 'BQ', name: 'Biologia e Química (BQ)' },
         { code: 'GH', name: 'História e Geografia (GH)' },
-        { code: 'LEMC', name: 'Português e EMC (LEMC)' },
+        { code: 'LEMC', name: 'Português e EMC (L.EMC)' },
         { code: 'ING_EMC', name: 'Inglês e EMC (ING_EMC)' },
         { code: 'FRA_EMC', name: 'Francês e EMC (FRA_EMC)' },
         { code: 'EVP', name: 'Educação Visual e Plástica (EVP)' },
@@ -1364,7 +1380,7 @@ export default function PainelMatriculas({
     if (!confirmar) return;
 
     // Atualizar aluno marcando isTransferidoSaida e dados relacionados
-    onAddStudent({
+    const updatedAluno: Student = {
       ...aluno,
       isTransferidoSaida: true,
       dataTransferenciaSaida: new Date().toLocaleDateString('pt-AO'),
@@ -1373,11 +1389,20 @@ export default function PainelMatriculas({
       processoTransferenciaSaida: saidaProcessoTransferencia.trim(),
       provinciaDestino: saidaProvDestino,
       motivoTransferencia: saidaMotivo.trim()
+    };
+
+    onAddStudent(updatedAluno);
+
+    // Emissão Automática: Abrir o modal com Guia de Transferência e Boletim de Notas
+    setModalTransferenciaEmissao({
+      isOpen: true,
+      student: updatedAluno,
+      guiaNumero: saidaGuiaSaida.trim(),
+      escolaDestino: saidaEscolaDestino.trim(),
+      provinciaDestino: saidaProvDestino,
+      motivo: saidaMotivo.trim()
     });
 
-    // Sucesso Pop-up de Confirmação
-    window.alert(`Transferência de Saída homologada com sucesso! O aluno "${aluno.name}" foi registado como Transferido.`);
-    
     resetSaidaForm();
     setAbaAtiva('LISTAGEM_GERAL');
   };
@@ -2228,7 +2253,7 @@ export default function PainelMatriculas({
                         <option value="MF">Matemática e Física (Mat-Fisica)</option>
                         <option value="GH">História e Geografia (Geo-Historia)</option>
                         <option value="BQ">Biologia e Química (Bio-química)</option>
-                        <option value="LEMC">Português e EMC</option>
+                        <option value="LEMC">Português e EMC (L.EMC)</option>
                         <option value="ING_EMC">Inglês e EMC</option>
                         <option value="FRA_EMC">Francês e EMC</option>
                         <option value="EVP">Educação Visual e Plástica (EVP)</option>
@@ -3208,7 +3233,24 @@ export default function PainelMatriculas({
                         
                         {userRole !== 'PROFESSOR' && (
                           <td className="p-3.5 text-right">
-                            <div className="flex justify-end gap-1.5">
+                            <div className="flex justify-end items-center gap-1.5">
+                              {isSaida && (
+                                <button
+                                  type="button"
+                                  onClick={() => setModalTransferenciaEmissao({
+                                    isOpen: true,
+                                    student: student,
+                                    guiaNumero: student.guiaTransferenciaSaida,
+                                    escolaDestino: student.escolaDestino,
+                                    provinciaDestino: student.provinciaDestino,
+                                    motivo: student.motivoTransferencia
+                                  })}
+                                  className="p-1 text-rose-600 hover:text-rose-800 hover:bg-rose-50 rounded-lg transition-all cursor-pointer font-bold flex items-center gap-1"
+                                  title="Emitir / Imprimir Guia & Boletim de Transferência"
+                                >
+                                  <FileText className="w-3.5 h-3.5" />
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 onClick={() => handleEditarAluno(student)}
@@ -3609,7 +3651,7 @@ export default function PainelMatriculas({
                               <>
                                 <option value="EP">Ensino Primário (EP)</option>
                                 <option value="PE">Pré-Escolar / Ed. Infância (PE)</option>
-                                <option value="LEMC">Língua Portuguesa e EMC (LEMC)</option>
+                                <option value="LEMC">Língua Portuguesa e EMC (L.EMC)</option>
                                 <option value="ING_EMC">Inglês e EMC (ING_EMC)</option>
                                 <option value="FRA_EMC">Francês e EMC (FRA_EMC)</option>
                                 <option value="MF">Matemática e Física (MF)</option>
@@ -4067,7 +4109,7 @@ export default function PainelMatriculas({
                         {resSubsystem === 'MAGISTERIO' && [
                           { code: 'EP', name: 'Ensino Primário (EP)' },
                           { code: 'PE', name: 'Pré-Escolar / Ed. Infância (PE)' },
-                          { code: 'LEMC', name: 'Língua Portuguesa e EMC (LEMC)' },
+                          { code: 'LEMC', name: 'Língua Portuguesa e EMC (L.EMC)' },
                           { code: 'ING_EMC', name: 'Inglês e EMC (ING_EMC)' },
                           { code: 'FRA_EMC', name: 'Francês e EMC (FRA_EMC)' },
                           { code: 'MF', name: 'Matemática e Física (MF)' },
@@ -4401,6 +4443,20 @@ export default function PainelMatriculas({
           </div>
         </div>
       )}
+
+      {/* Modal de Emissão Oficial de Guia e Boletim de Transferência */}
+      <TransferenciaEmissaoModal
+        isOpen={modalTransferenciaEmissao.isOpen}
+        onClose={() => setModalTransferenciaEmissao({ isOpen: false, student: null })}
+        student={modalTransferenciaEmissao.student}
+        schoolSettings={schoolSettings || {}}
+        grades={grades}
+        activeModality={activeModality}
+        initialGuiaNumero={modalTransferenciaEmissao.guiaNumero}
+        initialEscolaDestino={modalTransferenciaEmissao.escolaDestino}
+        initialProvinciaDestino={modalTransferenciaEmissao.provinciaDestino}
+        initialMotivo={modalTransferenciaEmissao.motivo}
+      />
 
     </div>
   );

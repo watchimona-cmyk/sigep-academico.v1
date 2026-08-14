@@ -506,6 +506,31 @@ Validade: 2 Minutos (Expira em: ${new Date(newUnlock.expiresAt).toLocaleTimeStri
     setPendingRequestData(null);
   };
 
+  const destroyGradeRequest = (studentId: string, subject: string, trimester: string, reqId?: string) => {
+    try {
+      const raw = localStorage.getItem('sigep_grade_requests_v1');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        const filtered = parsed.filter((r: any) => {
+          if (reqId && r.id === reqId) return false;
+          if (r.studentId === studentId && r.subject === subject && String(r.trimester) === String(trimester)) return false;
+          return true;
+        });
+        localStorage.setItem('sigep_grade_requests_v1', JSON.stringify(filtered));
+        setActiveApprovedRequests(filtered);
+        window.dispatchEvent(new Event('storage'));
+
+        fetch('/api/grade_requests', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(filtered)
+        }).catch(() => {});
+      }
+    } catch (e) {
+      console.error('Erro ao destruir solicitação da memória:', e);
+    }
+  };
+
   // Sync / monitor active requests for automatic instant approval
   useEffect(() => {
     if (isRequestModalOpen && pendingRequestData) {
@@ -513,21 +538,24 @@ Validade: 2 Minutos (Expira em: ${new Date(newUnlock.expiresAt).toLocaleTimeStri
       const approved = activeApprovedRequests.find(r => 
         r.studentId === pendingRequestData.studentId &&
         r.subject === pendingRequestData.subject &&
-        r.trimester === activeTrim &&
+        String(r.trimester) === String(activeTrim) &&
         r.status === 'APPROVED'
       );
       if (approved) {
         setOnlineApprovedSuccess('✓ Aprovado e assinado digitalmente em tempo real!');
+        // Destrói imediatamente a solicitação da memória
+        destroyGradeRequest(approved.studentId, approved.subject, String(activeTrim), approved.id);
+
         setTimeout(() => {
           executePendingGradeSave(approved.studentId, approved.subject, approved.trimester);
           setIsRequestModalOpen(false);
           setOnlineApprovedSuccess(null);
           setOnlineRequestSent(false);
           setRequestReason('');
-        }, 1500);
+        }, 1200);
       }
     }
-  }, [activeApprovedRequests, isRequestModalOpen, pendingRequestData]);
+  }, [activeApprovedRequests, isRequestModalOpen, pendingRequestData, isProfessorRole, profValidated, profSelectedTrim, selectedTrim]);
 
   const handleOnlineSubmitRequest = () => {
     if (!requestReason.trim()) {
@@ -606,40 +634,22 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
       return;
     }
 
-    // Authenticated! Save as approved request
     const activeTrim = isProfessorRole && profValidated ? profSelectedTrim : selectedTrim;
-    const approvedReq = {
-      id: 'req-' + Date.now(),
-      requesterId: loggedInStaff ? loggedInStaff.id : 'SECRETARIO',
-      requesterName: loggedInStaff ? loggedInStaff.name : 'Secretário',
-      requesterRole: loggedInStaff ? loggedInStaff.role : 'SECRETARIO',
-      studentId: pendingRequestData.studentId,
-      studentName: pendingRequestData.studentName,
-      subject: pendingRequestData.subject,
-      trimester: activeTrim,
-      reason: 'Código de Validação Física Directa',
-      status: 'APPROVED',
-      code: 'PHYSICAL-' + Math.floor(1000 + Math.random() * 9000),
-      approverName: approver.name,
-      approvedAt: new Date().toISOString()
-    };
-
-    const currentReqs = JSON.parse(localStorage.getItem('sigep_grade_requests_v1') || '[]');
-    localStorage.setItem('sigep_grade_requests_v1', JSON.stringify([...currentReqs, approvedReq]));
-    window.dispatchEvent(new Event('storage'));
-
     addAuditLog(`Autorizou alteração de notas físicas para ${pendingRequestData.studentName} na disciplina ${pendingRequestData.subject}`, `Aprovador Físico: ${approver.name}`);
     
+    // Destrói qualquer solicitação pendente para este aluno/disciplina/trimestre
+    destroyGradeRequest(pendingRequestData.studentId, pendingRequestData.subject, String(activeTrim));
+
     setPhysicalSuccess('✓ Autorização Física Validada com Sucesso!');
     setPhysicalError(null);
     setTimeout(() => {
-      executePendingGradeSave(approvedReq.studentId, approvedReq.subject, approvedReq.trimester);
+      executePendingGradeSave(pendingRequestData.studentId, pendingRequestData.subject, activeTrim);
       setIsRequestModalOpen(false);
       setPhysicalSuccess(null);
       setPhysicalAuthPassword('');
       setOnlineRequestSent(false);
       setRequestReason('');
-    }, 1500);
+    }, 1200);
   };
 
   // Derive class limits
@@ -1928,7 +1938,7 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
     // Load existing grades into inputs
     const activeTrim = selectedTrim;
     const initialValues: typeof modalFields = {};
-    const subjectsForClass = getSubjectsForStudent(student, activeModality);
+    const subjectsForClass = getSubjectsForStudent(student, activeModality, activeSpecialty);
     
     subjectsForClass.forEach(sub => {
       const gRecord = grades.find(g => g.studentId === student.id && g.subject === sub && g.trimester === activeTrim);
@@ -1977,7 +1987,7 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
 
     const activeTrim = selectedTrim;
     const initialValues: typeof modalFields = {};
-    const subjectsForClass = getSubjectsForStudent(student, activeModality);
+    const subjectsForClass = getSubjectsForStudent(student, activeModality, activeSpecialty);
 
     subjectsForClass.forEach(sub => {
       const gRecord = grades.find(g => g.studentId === student.id && g.subject === sub && g.trimester === activeTrim);
@@ -2768,7 +2778,7 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
                       })}
 
                       {(() => {
-                        const studentRealSubjects = getSubjectsForStudent(student, activeModality);
+                        const studentRealSubjects = getSubjectsForStudent(student, activeModality, activeSpecialty);
                         const studentDisciplinas: NotaDisciplina[] = studentRealSubjects.map((sub) => {
                           const score = getGradeRecord(student.id, sub as SubjectType);
                           const escala = activeModality === 'ENSINO_PRIMARIO' ? 10 : 20;
@@ -3090,7 +3100,7 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
                       onChange={(e) => setSelectedSubjectForLaunch(e.target.value as SubjectType)}
                       className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-850 focus:outline-none focus:border-indigo-500"
                     >
-                      {getSubjectsForStudent(modalStudent, activeModality).map(sub => (
+                      {getSubjectsForStudent(modalStudent, activeModality, activeSpecialty).map(sub => (
                         <option key={sub} value={sub}>{sub}</option>
                       ))}
                     </select>
@@ -3468,7 +3478,7 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
                   <option value="MF">Matemática e Física (Mat-Fisica)</option>
                   <option value="GH">História e Geografia (Geo-Historia)</option>
                   <option value="BQ">Biologia e Química (Bio-química)</option>
-                  <option value="LEMC">Português e EMC</option>
+                  <option value="LEMC">Português e EMC (L.EMC)</option>
                   <option value="ING_EMC">Inglês e EMC</option>
                   <option value="FRA_EMC">Francês e EMC</option>
                   <option value="EVP">Educação Visual e Plástica (EVP)</option>

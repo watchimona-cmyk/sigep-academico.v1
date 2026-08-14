@@ -52,7 +52,37 @@ export function saveArchivedYear(record: ArchiveYearRecord) {
   }
   try {
     localStorage.setItem(ARCHIVE_STORAGE_KEY, JSON.stringify(current));
+    window.dispatchEvent(new CustomEvent('sigep_archive_years_updated', { detail: current }));
   } catch (e) {
     console.error('Erro ao guardar ano lectivo arquivado:', e);
+  }
+
+  // Sincronizar com servidor central
+  fetch('/api/archive-years', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(current)
+  }).catch(() => {});
+}
+
+export function deleteArchivedYear(academicYear: string): boolean {
+  try {
+    const current = getArchivedYears();
+    const filtered = current.filter(r => r.academicYear !== academicYear);
+    localStorage.setItem(ARCHIVE_STORAGE_KEY, JSON.stringify(filtered));
+    window.dispatchEvent(new CustomEvent('sigep_archive_years_updated', { detail: filtered }));
+    window.dispatchEvent(new Event('storage'));
+
+    // Sincronizar com backend
+    fetch('/api/archive-years', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(filtered)
+    }).catch(() => {});
+
+    return true;
+  } catch (e) {
+    console.error('Erro ao eliminar ano lectivo arquivado:', e);
+    return false;
   }
 }

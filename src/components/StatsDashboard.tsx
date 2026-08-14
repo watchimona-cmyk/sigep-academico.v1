@@ -48,7 +48,7 @@ const SPECIALTIES_MAGISTERIO = [
   { code: 'MF', label: 'Matemática e Física (Mat-Física)' },
   { code: 'GH', label: 'História e Geografia (Geo-História)' },
   { code: 'BQ', label: 'Biologia e Química (Bio-Química)' },
-  { code: 'LEMC', label: 'Português e EMC' },
+  { code: 'LEMC', label: 'Português e EMC (L.EMC)' },
   { code: 'EP', label: 'Ensino Primário' },
   { code: 'PE', label: 'Pré-Escolar' },
   { code: 'ING_EMC', label: 'Inglês e EMC' },

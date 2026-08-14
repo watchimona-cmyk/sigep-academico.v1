@@ -331,7 +331,7 @@ export default function PainelPautas({
                       <option value="MF">Matemática e Física (Mat-Fisica)</option>
                       <option value="GH">História e Geografia (Geo-Historia)</option>
                       <option value="BQ">Biologia e Química (Bio-química)</option>
-                      <option value="LEMC">Português e EMC</option>
+                      <option value="LEMC">Português e EMC (L.EMC)</option>
                       <option value="ING_EMC">Inglês e EMC</option>
                       <option value="FRA_EMC">Francês e EMC</option>
                       <option value="EVP">Educação Visual e Plástica (EVP)</option>
@@ -553,6 +553,7 @@ export default function PainelPautas({
                 loggedInStaff={loggedInStaff}
                 schoolSettings={schoolSettings}
                 activeModality={activeModality}
+                selectedSpecialty={localSpecialty}
                 useNpp={useNpp}
                 onToggleNpp={onToggleNpp}
                 foreignLanguageProp={localLanguage !== 'NENHUMA' ? localLanguage : undefined}
@@ -571,6 +572,7 @@ export default function PainelPautas({
                 loggedInStaff={loggedInStaff}
                 schoolSettings={schoolSettings}
                 activeModality={activeModality}
+                selectedSpecialty={localSpecialty}
                 useNpp={useNpp}
                 onToggleNpp={onToggleNpp}
                 foreignLanguageProp={localLanguage !== 'NENHUMA' ? localLanguage : undefined}

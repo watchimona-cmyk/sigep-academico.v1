@@ -1224,23 +1224,128 @@ export default function DeclaracoesCertificados({
     }
   }, [searchQuery, activeStudents, selectedStudent]);
 
+  // Helper to extract complete biographical history for student from current students, archives, candidaturas, and local records
+  const resolveStudentBioHistory = (st: Student) => {
+    let nat = st.naturalidade || '';
+    let mun = st.municipio || '';
+    let prov = st.province || '';
+    let father = st.fatherName || '';
+    let mother = st.motherName || '';
+    let birth = st.birthDate || '';
+    const docType = (st.docType || (st.cedulaRegisto && !st.bi ? 'CEDULA' : 'BI')) as 'BI' | 'CEDULA' | 'PASSAPORTE';
+    let biNum = docType === 'CEDULA' ? (st.cedulaRegisto || st.bi || '') : (st.bi || st.cedulaRegisto || '');
+    let biSec = st.biSector || '';
+    let biDt = st.biDate || '';
+
+    const stId = (st.id || '').trim().toLowerCase();
+    const stName = (st.name || '').trim().toLowerCase();
+    const stBi = biNum.trim().toLowerCase();
+
+    const isMatch = (otherId?: string, otherName?: string, otherBi?: string) => {
+      if (stId && otherId && otherId.trim().toLowerCase() === stId) return true;
+      if (stBi && otherBi && otherBi.trim().toLowerCase() === stBi) return true;
+      if (stName && otherName && otherName.trim().toLowerCase() === stName) return true;
+      return false;
+    };
+
+    // 1. Search in current active / global students list
+    for (const s of (students || [])) {
+      if (isMatch(s.id, s.name, s.bi || s.cedulaRegisto)) {
+        if (!nat && s.naturalidade) nat = s.naturalidade;
+        if (!mun && s.municipio) mun = s.municipio;
+        if (!prov && s.province) prov = s.province;
+        if (!father && s.fatherName) father = s.fatherName;
+        if (!mother && s.motherName) mother = s.motherName;
+        if (!birth && s.birthDate) birth = s.birthDate;
+        if (!biSec && s.biSector) biSec = s.biSector;
+        if (!biDt && s.biDate) biDt = s.biDate;
+      }
+    }
+
+    // 2. Search in archived academic years
+    try {
+      const archives = getArchivedYears();
+      for (const arch of archives) {
+        for (const s of (arch.students || [])) {
+          if (isMatch(s.id, s.name, s.bi || s.cedulaRegisto)) {
+            if (!nat && s.naturalidade) nat = s.naturalidade;
+            if (!mun && s.municipio) mun = s.municipio;
+            if (!prov && s.province) prov = s.province;
+            if (!father && s.fatherName) father = s.fatherName;
+            if (!mother && s.motherName) mother = s.motherName;
+            if (!birth && s.birthDate) birth = s.birthDate;
+            if (!biSec && s.biSector) biSec = s.biSector;
+            if (!biDt && s.biDate) biDt = s.biDate;
+          }
+        }
+      }
+    } catch (e) {}
+
+    // 3. Search in candidaturas or matriculas stored in localStorage
+    const localKeys = ['sigep_candidaturas_v1', 'sigep_candidaturas_online_v1', 'sigep_candidates_v1', 'sigep_matriculas_v1'];
+    for (const key of localKeys) {
+      try {
+        const raw = localStorage.getItem(key);
+        if (raw) {
+          const list = JSON.parse(raw);
+          if (Array.isArray(list)) {
+            for (const item of list) {
+              if (isMatch(item.id, item.name || item.studentName || item.candName, item.bi || item.docNumber || item.cedulaRegisto)) {
+                if (!nat && (item.naturalidade || item.municipio)) nat = item.naturalidade || item.municipio;
+                if (!mun && (item.municipio || item.naturalidade)) mun = item.municipio || item.naturalidade;
+                if (!prov && (item.province || item.provincia)) prov = item.province || item.provincia;
+                if (!father && (item.fatherName || item.filiacaoPai)) father = item.fatherName || item.filiacaoPai;
+                if (!mother && (item.motherName || item.filiacaoMae)) mother = item.motherName || item.filiacaoMae;
+                if (!birth && (item.birthDate || item.candBirthDate || item.dataNascimento)) birth = item.birthDate || item.candBirthDate || item.dataNascimento;
+                if (!biSec && (item.biSector || item.biIssuerSector || item.localEmissao)) biSec = item.biSector || item.biIssuerSector || item.localEmissao;
+                if (!biDt && (item.biDate || item.biIssueDate || item.dataEmissao)) biDt = item.biDate || item.biIssueDate || item.dataEmissao;
+              }
+            }
+          }
+        }
+      } catch (e) {}
+    }
+
+    // 4. Automatic cross-fallbacks if still missing
+    if (!nat && mun) nat = mun;
+    if (!mun && nat) mun = nat;
+    if (!nat) nat = schoolSettings.municipality || 'Cafunfo';
+    if (!mun) mun = schoolSettings.municipality || 'Cafunfo';
+    if (!prov) prov = schoolSettings.province || 'Lunda Norte';
+
+    return {
+      naturalidade: nat,
+      municipio: mun,
+      province: prov,
+      fatherName: father,
+      motherName: mother,
+      birthDate: birth,
+      docType,
+      biNumber: biNum,
+      biSector: biSec,
+      biDate: biDt
+    };
+  };
+
   // Autopopulate fields when a student is selected
   const handleSelectStudent = (student: Student) => {
     setSelectedStudent(student);
+    const bio = resolveStudentBioHistory(student);
+
     setStudentName(student.name || '');
     setGender(student.gender || 'M');
-    setFatherName(student.fatherName || '');
-    setMotherName(student.motherName || '');
-    setBirthDate(student.birthDate || '');
-    setNaturalidade(student.naturalidade || '');
-    setMunicipio(student.municipio || student.naturalidade || schoolSettings.municipality || '');
-    setProvincia(student.province || schoolSettings.province || '');
-    const resolvedDocType = (student.docType || (student.cedulaRegisto && !student.bi ? 'CEDULA' : 'BI')) as 'BI' | 'CEDULA' | 'PASSAPORTE';
+    setFatherName(student.fatherName || bio.fatherName || '');
+    setMotherName(student.motherName || bio.motherName || '');
+    setBirthDate(student.birthDate || bio.birthDate || '');
+    setNaturalidade(student.naturalidade || bio.naturalidade || '');
+    setMunicipio(student.municipio || bio.municipio || schoolSettings.municipality || '');
+    setProvincia(student.province || bio.province || schoolSettings.province || '');
+    const resolvedDocType = (student.docType || bio.docType || 'BI') as 'BI' | 'CEDULA' | 'PASSAPORTE';
     setDocTypeSelected(resolvedDocType);
-    const resolvedDocNum = resolvedDocType === 'CEDULA' ? (student.cedulaRegisto || student.bi || '') : (student.bi || student.cedulaRegisto || '');
+    const resolvedDocNum = bio.biNumber || (resolvedDocType === 'CEDULA' ? (student.cedulaRegisto || student.bi || '') : (student.bi || student.cedulaRegisto || ''));
     setBiNumber(resolvedDocNum);
-    setBiSector(student.biSector || '');
-    setBiDate(student.biDate || '');
+    setBiSector(student.biSector || bio.biSector || '');
+    setBiDate(student.biDate || bio.biDate || '');
     setSelectedClass(student.class);
     setSelectedTurma(student.section);
     setSearchQuery('');
@@ -1298,9 +1403,10 @@ export default function DeclaracoesCertificados({
         sec.startsWith('EVP') ? 'EVP' :
         sec.startsWith('EDF') || sec.startsWith('EF') ? 'EDF' :
         sec.startsWith('EMC') || sec.startsWith('MOR') ? 'EMC' :
-        sec.startsWith('LE') || sec.startsWith('MC') ? 'LEMC' :
+        sec.startsWith('L.EMC') || sec.startsWith('LEMC') || sec.startsWith('L_EMC') || sec.startsWith('LE') || sec.startsWith('MC') ? 'LEMC' :
         sec.startsWith('GH') || sec.startsWith('HIS') ? 'GH' :
-        sec.startsWith('PE') ? 'PE' : 'CFB'
+        sec.startsWith('PRE') ? 'PE' :
+        sec.startsWith('PE') ? 'LEMC' : 'CFB'
       );
       
       targetSpec = spec as any;
@@ -3457,7 +3563,7 @@ export default function DeclaracoesCertificados({
                     <option value="MF">Matemática e Física (Mat-Fisica)</option>
                     <option value="GH">História e Geografia (Geo-Historia)</option>
                     <option value="BQ">Biologia e Química (Bio-química)</option>
-                    <option value="LEMC">Português e EMC</option>
+                    <option value="LEMC">Português e EMC (L.EMC)</option>
                     <option value="ING_EMC">Inglês e EMC</option>
                     <option value="FRA_EMC">Francês e EMC</option>
                     <option value="EVP">Educação Visual e Plástica (EVP)</option>

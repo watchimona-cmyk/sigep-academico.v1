@@ -47,7 +47,7 @@ const ALL_MAGISTERIO_SPECIALTIES = [
   { code: 'MF', label: 'Matemática e Física (Mat-Fisica)' },
   { code: 'GH', label: 'História e Geografia (Geo-Historia)' },
   { code: 'BQ', label: 'Biologia e Química (Bio-química)' },
-  { code: 'LEMC', label: 'Português e EMC' },
+  { code: 'LEMC', label: 'Português e EMC (L.EMC)' },
   { code: 'ING_EMC', label: 'Inglês e EMC' },
   { code: 'FRA_EMC', label: 'Francês e EMC' },
   { code: 'EVP', label: 'Educação Visual e Plástica (EVP)' },
@@ -444,6 +444,49 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
     setOnlineRequestSent(true);
   };
 
+  const destroyGradeRequest = (studentId: string, subject: string, trimester: string, reqId?: string) => {
+    try {
+      const raw = localStorage.getItem('sigep_grade_requests_v1');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        const filtered = parsed.filter((r: any) => {
+          if (reqId && r.id === reqId) return false;
+          if (r.studentId === studentId && r.subject === subject && String(r.trimester) === String(trimester)) return false;
+          return true;
+        });
+        localStorage.setItem('sigep_grade_requests_v1', JSON.stringify(filtered));
+        setActiveApprovedRequests(filtered);
+        window.dispatchEvent(new Event('storage'));
+
+        fetch('/api/grade_requests', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(filtered)
+        }).catch(() => {});
+      }
+    } catch (e) {
+      console.error('Erro ao destruir solicitação da memória:', e);
+    }
+  };
+
+  const openRequestModalForStudent = (studentId: string, studentName: string, subject: SubjectType, trimester: string) => {
+    // Purga solicitações antigas residuais da memória para garantir que não haja auto-aprovação
+    destroyGradeRequest(studentId, subject, trimester);
+    setPhysicalAuthPassword('');
+    setPhysicalError(null);
+    setPhysicalSuccess(null);
+    setOnlineApprovedSuccess(null);
+    setOnlineRequestSent(false);
+    setRequestReason('');
+    setPendingRequestData({
+      studentId,
+      studentName,
+      subject,
+      trimester
+    });
+    setIsRequestModalOpen(true);
+  };
+
   const handlePhysicalUnlock = () => {
     if (!physicalAuthId || !physicalAuthPassword) {
       setPhysicalError('Por favor, preencha o ID e a Senha d\'Acesso do Director.');
@@ -460,41 +503,23 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
       return;
     }
 
-    // Authenticated! Save as approved request
-    const approvedReq = {
-      id: 'req-' + Date.now(),
-      requesterId: loggedInStaff ? loggedInStaff.id : 'SECRETARIO',
-      requesterName: loggedInStaff ? loggedInStaff.name : 'Secretário',
-      requesterRole: loggedInStaff ? loggedInStaff.role : 'SECRETARIO',
-      studentId: pendingRequestData.studentId,
-      studentName: pendingRequestData.studentName,
-      subject: pendingRequestData.subject,
-      trimester: localTrimester,
-      reason: 'Código de Validação Física Directa',
-      status: 'APPROVED',
-      code: 'PHYSICAL-' + Math.floor(1000 + Math.random() * 9000),
-      approverName: approver.name,
-      approvedAt: new Date().toISOString()
-    };
-
-    const currentReqs = JSON.parse(localStorage.getItem('sigep_grade_requests_v1') || '[]');
-    localStorage.setItem('sigep_grade_requests_v1', JSON.stringify([...currentReqs, approvedReq]));
-    window.dispatchEvent(new Event('storage'));
-
     addAuditLog(`Autorizou alteração de notas físicas para ${pendingRequestData.studentName} na disciplina ${pendingRequestData.subject}`, `Aprovador Físico: ${approver.name}`);
     
+    // Destrói qualquer solicitação existente na memória para este aluno/disciplina/trimestre
+    destroyGradeRequest(pendingRequestData.studentId, pendingRequestData.subject, localTrimester);
+
     setPhysicalSuccess('✓ Autorização Física Validada com Sucesso!');
     setPhysicalError(null);
     setTimeout(() => {
-      // Create temporary unlock directly!
-      handleCreateTemporaryUnlock(approvedReq.studentId, approvedReq.subject, localTrimester);
+      // Concede desbloqueio temporário (2 minutos)
+      handleCreateTemporaryUnlock(pendingRequestData.studentId, pendingRequestData.subject, localTrimester);
       setIsRequestModalOpen(false);
       setPhysicalSuccess(null);
       setPhysicalAuthPassword('');
       setOnlineRequestSent(false);
       setRequestReason('');
       setIsLaunchModalOpen(true); // Open the launch modal back!
-    }, 1500);
+    }, 1200);
   };
 
   // Sync / monitor active requests for automatic instant approval
@@ -503,23 +528,26 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
       const approved = activeApprovedRequests.find(r => 
         r.studentId === pendingRequestData.studentId &&
         r.subject === pendingRequestData.subject &&
-        r.trimester === localTrimester &&
+        String(r.trimester) === String(localTrimester) &&
         r.status === 'APPROVED'
       );
       if (approved) {
         setOnlineApprovedSuccess('✓ Aprovado e assinado digitalmente em tempo real!');
+        // DESTRÓI A SOLICITAÇÃO DA MEMÓRIA IMEDIATAMENTE APÓS ATENDIDA
+        destroyGradeRequest(approved.studentId, approved.subject, localTrimester, approved.id);
+
         setTimeout(() => {
-          // Create temporary unlock directly!
+          // Cria o desbloqueio temporário imediato
           handleCreateTemporaryUnlock(approved.studentId, approved.subject, localTrimester);
           setIsRequestModalOpen(false);
           setOnlineApprovedSuccess(null);
           setOnlineRequestSent(false);
           setRequestReason('');
           setIsLaunchModalOpen(true); // Open the launch modal back!
-        }, 1500);
+        }, 1200);
       }
     }
-  }, [activeApprovedRequests, isRequestModalOpen, pendingRequestData]);
+  }, [activeApprovedRequests, isRequestModalOpen, pendingRequestData, localTrimester]);
 
   // Launcher modal states (SiGeP 1.1.0 Engine)
   const [isLaunchModalOpen, setIsLaunchModalOpen] = useState<boolean>(false);
@@ -855,9 +883,10 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
     if (sec.startsWith('EVP')) return 'EVP';
     if (sec.startsWith('EDF') || sec.startsWith('EF')) return 'EDF';
     if (sec.startsWith('EMC') || sec.startsWith('MOR')) return 'EMC';
-    if (sec.startsWith('LEMC') || sec.startsWith('LE') || sec.startsWith('MC')) return 'LEMC';
+    if (sec.startsWith('L.EMC') || sec.startsWith('LEMC') || sec.startsWith('L_EMC') || sec.startsWith('LE') || sec.startsWith('MC')) return 'LEMC';
     if (sec.startsWith('GH') || sec.startsWith('HG')) return 'GH';
-    if (sec.startsWith('PRE') || sec.startsWith('PE')) return 'PE';
+    if (sec.startsWith('PRE') || sec.startsWith('INF')) return 'PE';
+    if (sec.startsWith('PE')) return 'LEMC'; // Turmas legadas com PE
     return undefined;
   };
 
@@ -1031,13 +1060,7 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
       if (isGradeImmutableForTeacher(studentId, localSubject, localTrimester)) {
         const student = students.find(s => s.id === studentId);
         if (student) {
-          setPendingRequestData({
-            studentId: student.id,
-            studentName: student.name,
-            subject: localSubject,
-            trimester: localTrimester
-          });
-          setIsRequestModalOpen(true);
+          openRequestModalForStudent(student.id, student.name, localSubject, localTrimester);
         }
         return;
       }
@@ -2214,13 +2237,7 @@ Aceda ao Painel de Direcção para deferir ou indeferir este pedido.`,
                                   <button
                                     type="button"
                                     onClick={() => {
-                                      setPendingRequestData({
-                                        studentId: modalStudent.id,
-                                        studentName: modalStudent.name,
-                                        subject: sub,
-                                        trimester: localTrimester
-                                      });
-                                      setIsRequestModalOpen(true);
+                                      openRequestModalForStudent(modalStudent.id, modalStudent.name, sub, localTrimester);
                                       setIsLaunchModalOpen(false);
                                     }}
                                     className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-[10px] px-3 py-1.5 rounded-lg transition-all shadow-xs flex items-center gap-1 cursor-pointer"

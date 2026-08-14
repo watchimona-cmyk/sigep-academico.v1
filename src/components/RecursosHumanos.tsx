@@ -4137,7 +4137,7 @@ export default function RecursosHumanos({
                         <option value="MF">MF - Matemática e Física</option>
                         <option value="GH">GH - História e Geografia</option>
                         <option value="BQ">BQ - Biologia e Química</option>
-                        <option value="LEMC">LEMC - Língua Portuguesa e EMC</option>
+                        <option value="LEMC">L.EMC - Língua Portuguesa e EMC</option>
                         <option value="EP">EP - Ensino Primário</option>
                         <option value="PE">PE - Educação Pré-Escolar</option>
                         <option value="ING_EMC">ING_EMC - Inglês e EMC</option>

@@ -350,9 +350,9 @@ export function getSectionsList(modality: string, specialty?: string): string[] 
     if (spec === 'MF' || spec.includes('MATEMÁTICA E FÍSICA') || spec.includes('MATEMATICA')) prefix = 'MF';
     else if (spec === 'GH' || spec === 'HG' || spec.includes('HISTÓRIA E GEOGRAFIA') || spec.includes('GEOGRAFIA')) prefix = 'HG';
     else if (spec === 'BQ' || spec.includes('BIOLOGIA E QUÍMICA') || spec.includes('BIOLOGIA')) prefix = 'BQ';
-    else if (spec === 'LEMC' || spec.includes('PORTUGUÊS')) prefix = 'PE';
+    else if (spec === 'LEMC' || spec === 'L.EMC' || spec.includes('PORTUGUÊS') || spec.includes('PORTUGUES')) prefix = 'L.EMC';
     else if (spec === 'EP' || spec.includes('PRIMÁRIO') || spec.includes('PRIMARIO')) prefix = 'EP';
-    else if (spec === 'PE' || spec.includes('PRÉ-ESCOLAR') || spec === 'PRE') prefix = 'PRE';
+    else if (spec === 'PE' || spec.includes('PRÉ-ESCOLAR') || spec.includes('PRE-ESCOLAR') || spec === 'PRE') prefix = 'PRE';
     else if (spec === 'ING_EMC' || spec.includes('INGLÊS') || spec.includes('INGLES') || spec === 'ING') prefix = 'ING';
     else if (spec === 'FRA_EMC' || spec.includes('FRANCÊS') || spec.includes('FRANCES') || spec === 'FRA') prefix = 'FRA';
     else if (spec === 'EVP' || spec.includes('VISUAL E PLÁSTICA') || spec.includes('PLASTICA')) prefix = 'EVP';

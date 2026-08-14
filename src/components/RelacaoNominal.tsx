@@ -130,7 +130,7 @@ export default function RelacaoNominal({
       { value: 'MF', label: 'Matemática e Física (Mat-Fisica)' },
       { value: 'GH', label: 'História e Geografia (Geo-Historia)' },
       { value: 'BQ', label: 'Biologia e Química (Bio-química)' },
-      { value: 'LEMC', label: 'Português e EMC' },
+      { value: 'LEMC', label: 'Português e EMC (L.EMC)' },
       { value: 'ING_EMC', label: 'Inglês e EMC' },
       { value: 'FRA_EMC', label: 'Francês e EMC' },
       { value: 'EVP', label: 'Educação Visual e Plástica (EVP)' },

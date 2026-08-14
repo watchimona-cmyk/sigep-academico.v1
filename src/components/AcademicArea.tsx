@@ -183,7 +183,7 @@ const INITIAL_COURSES: Course[] = [
       },
       {
         id: '2-7',
-        name: 'Português e EMC (LEMC)',
+        name: 'Português e EMC (L.EMC)',
         code: 'LEMC',
         disciplinesByClass: {
           '10': ['Língua Portuguesa', 'Língua Inglesa','Língua Francesa', 'Literatura','Matemática', 'PDA','NEE','Informática', 'FPSD', 'História', 'Empreendedorismo','Educação Física'],
@@ -720,6 +720,7 @@ export default function AcademicArea({
       {academicTab === 'MATRICULA' && (
         <PainelMatriculas
           students={students}
+          grades={grades}
           onAddStudent={onAddStudent}
           onDeleteStudent={onDeleteStudent}
           classes={classes}
@@ -738,6 +739,7 @@ export default function AcademicArea({
       {academicTab === 'RECONFIRMACAO' && (
         <PainelMatriculas
           students={students}
+          grades={grades}
           onAddStudent={onAddStudent}
           onDeleteStudent={onDeleteStudent}
           classes={classes}
@@ -754,6 +756,7 @@ export default function AcademicArea({
       {academicTab === 'TRANSFERIDO_ENTRADA' && (
         <PainelMatriculas
           students={students}
+          grades={grades}
           onAddStudent={onAddStudent}
           onDeleteStudent={onDeleteStudent}
           classes={classes}
@@ -770,6 +773,7 @@ export default function AcademicArea({
       {academicTab === 'TRANSFERIDO_SAIDA' && (
         <PainelMatriculas
           students={students}
+          grades={grades}
           onAddStudent={onAddStudent}
           onDeleteStudent={onDeleteStudent}
           classes={classes}
@@ -786,6 +790,7 @@ export default function AcademicArea({
       {academicTab === 'CANDIDATURAS' && (
         <PainelMatriculas
           students={students}
+          grades={grades}
           onAddStudent={onAddStudent}
           onDeleteStudent={onDeleteStudent}
           classes={classes}

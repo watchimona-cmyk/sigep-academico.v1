@@ -701,19 +701,28 @@ export function getSubjectsForClass(className: string, activeModality?: Modality
 
     if ((modality === 'PUNIV' || modality === 'MAGISTERIO') && resolvedSpecialty) {
       const itemSpec = (item.specialty || '').toUpperCase().trim();
-      const resSpec = resolvedSpecialty.toUpperCase().trim();
+      let resSpec = resolvedSpecialty.toUpperCase().trim();
+
+      // Normalização padrão para LEMC / L.EMC
+      if (['LEMC', 'L.EMC', 'L_EMC', 'PORTUGUES', 'PORTUGUÊS'].includes(resSpec)) {
+        resSpec = 'LEMC';
+      }
+      let normItemSpec = itemSpec;
+      if (['LEMC', 'L.EMC', 'L_EMC', 'PORTUGUES', 'PORTUGUÊS'].includes(normItemSpec)) {
+        normItemSpec = 'LEMC';
+      }
+
+      // Normalização padrão para Pré-Escolar
+      if (['PE', 'PRE', 'INFANCIA', 'INFÂNCIA'].includes(resSpec)) {
+        resSpec = 'PE';
+      }
+      if (['PE', 'PRE', 'INFANCIA', 'INFÂNCIA'].includes(normItemSpec)) {
+        normItemSpec = 'PE';
+      }
 
       // Common/Geral subjects apply to all specialties
-      if (!itemSpec || itemSpec === 'GERAL') return true;
-      if (itemSpec === resSpec) return true;
-
-      // Group equivalences
-      if (['LEMC', 'ING_EMC', 'FRA_EMC', 'EMC'].includes(resSpec)) {
-        if (['LEMC', 'ING_EMC', 'FRA_EMC', 'EMC'].includes(itemSpec)) return true;
-      }
-      if (['EP'].includes(resSpec) && itemSpec === 'EP') return true;
-      if (['PE'].includes(resSpec) && itemSpec === 'PE') return true;
-      if (['MF', 'EDF'].includes(resSpec) && ['MF', 'EDF'].includes(itemSpec)) return true;
+      if (!normItemSpec || normItemSpec === 'GERAL') return true;
+      if (normItemSpec === resSpec) return true;
 
       return false;
     }
@@ -736,7 +745,7 @@ export function getSpecialtyFromSection(section: string, modality?: string): 'CF
   const sec = (section || '').toUpperCase().trim();
   if (!sec) return undefined;
 
-  if (sec.includes('LEMC') || sec.includes('L.EMC') || sec.includes('LE')) return 'LEMC';
+  if (sec.includes('LEMC') || sec.includes('L.EMC') || sec.includes('L_EMC') || sec.startsWith('LE') || sec.includes('PORT')) return 'LEMC';
   if (sec.includes('CFB') || sec.includes('CB') || sec.includes('FM') || sec.includes('FB')) return 'CFB';
   if (sec.includes('CEJ') || sec.includes('CSE') || sec.includes('EJ')) return 'CEJ';
   if (sec.includes('CS') || sec.includes('HUM')) return 'CS';
@@ -751,16 +760,17 @@ export function getSpecialtyFromSection(section: string, modality?: string): 'CF
   if (sec.includes('EMC')) return 'EMC';
   if (sec.includes('PRE') || sec.includes('INF')) return 'PE';
   if (sec.includes('EP') || sec.includes('PRI')) return 'EP';
+  if (sec.includes('PE')) return 'LEMC'; // Suporte para turmas legadas onde PE indicava Português e EMC
   
   return undefined;
 }
 
 export function getSpecialtyFullName(spec: string): string {
   const mapping: { [key: string]: string } = {
-    'CFB': 'Ciências Físicas e Biológicas',
-    'CEJ': 'Ciências Económico-Jurídicas',
-    'CS': 'Ciências Sociais / Humanas',
-    'AV': 'Artes Visuais',
+    'CFB': 'Ciências Físicas e Biológicas (CFB)',
+    'CEJ': 'Ciências Económico-Jurídicas (CEJ)',
+    'CS': 'Ciências Sociais / Humanas (CS)',
+    'AV': 'Artes Visuais (AV)',
     'MF': 'Matemática e Física',
     'EP': 'Ensino Primário',
     'BQ': 'Biologia e Química',
@@ -769,7 +779,8 @@ export function getSpecialtyFullName(spec: string): string {
     'EVP': 'Educação Visual e Plástica',
     'EDF': 'Educação Física',
     'EMC': 'Educação Moral e Cívica',
-    'LEMC': 'Português e EMC',
+    'LEMC': 'Português e EMC (L.EMC)',
+    'L.EMC': 'Português e EMC (L.EMC)',
     'GH': 'História e Geografia',
     'PE': 'Pré-Escolar',
     'GERAL': 'Ensino Geral'
